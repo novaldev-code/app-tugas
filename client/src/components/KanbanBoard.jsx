@@ -6,15 +6,13 @@ import {
   useSensor,
   useSensors,
 } from '@dnd-kit/core';
-import {
-  formatDate,
-  priorityClass,
-  priorityLabel,
-  statusClass,
-  statusLabel,
-  STATUSES,
-} from '../labels.js';
+import { statusLabel, STATUSES } from '../labels.js';
 import Filters from './Filters.jsx';
+import TaskActions from './task/TaskActions.jsx';
+import TaskBadges from './task/TaskBadges.jsx';
+import TaskMeta from './task/TaskMeta.jsx';
+import Button from './ui/Button.jsx';
+import { SkeletonCard } from './ui/Skeleton.jsx';
 
 function DraggableTask({ task, onEdit, onDelete }) {
   const { attributes, isDragging, listeners, setNodeRef, transform } = useDraggable({
@@ -39,48 +37,18 @@ function DraggableTask({ task, onEdit, onDelete }) {
           {...attributes}
           aria-label={`Seret tugas ${task.title}`}
         >
-          Seret
+          ⋮⋮
         </button>
-        <h4>{task.title}</h4>
+        <div className="kanban-card-title">{task.title}</div>
       </div>
 
       {task.description && <p className="task-description">{task.description}</p>}
 
-      <div className="task-meta">
-        <span className={`badge ${statusClass(task.status)}`}>
-          {statusLabel(task.status)}
-        </span>
-        <span className={`badge ${priorityClass(task.priority)}`}>
-          {priorityLabel(task.priority)}
-        </span>
-      </div>
+      <TaskBadges status={task.status} priority={task.priority} />
 
       <div className="kanban-card-footer">
-        {task.deadline ? (
-          <span className={task.overdue ? 'deadline overdue' : 'deadline'}>
-            {formatDate(task.deadline)}
-            {task.overdue ? ' - Terlambat' : ''}
-          </span>
-        ) : (
-          <span className="muted">Tanpa tenggat</span>
-        )}
-
-        <div className="task-actions">
-          <button
-            type="button"
-            className="button small secondary"
-            onClick={() => onEdit(task)}
-          >
-            Ubah
-          </button>
-          <button
-            type="button"
-            className="button small danger-ghost"
-            onClick={() => onDelete(task)}
-          >
-            Hapus
-          </button>
-        </div>
+        <TaskMeta deadline={task.deadline} overdue={task.overdue} />
+        <TaskActions onEdit={() => onEdit(task)} onDelete={() => onDelete(task)} />
       </div>
     </article>
   );
@@ -95,13 +63,16 @@ function KanbanColumn({ status, tasks, onEdit, onDelete }) {
       className={`kanban-column${isOver ? ' over' : ''}`}
     >
       <header className="kanban-column-header">
-        <h3>{statusLabel(status)}</h3>
-        <span className="count">{tasks.length}</span>
+        <div>
+          <div className="kanban-column-title">{statusLabel(status)}</div>
+          <div className="kpi-meta">{tasks.length} tugas</div>
+        </div>
+        <span className="task-group-count">{tasks.length}</span>
       </header>
 
       <div className="kanban-column-body">
         {tasks.length === 0 ? (
-          <p className="kanban-empty">Letakkan tugas di sini.</p>
+          <div className="kanban-empty">Letakkan tugas di sini</div>
         ) : (
           tasks.map((task) => (
             <DraggableTask
@@ -163,47 +134,55 @@ export default function KanbanBoard({
   }
 
   return (
-    <section className="kanban-view">
-      <header className="section-heading">
-        <div>
-          <h2>Kanban</h2>
-          <p>Seret kartu tugas ke kolom status yang diinginkan.</p>
-        </div>
-        <button type="button" className="button primary" onClick={onAdd}>
-          Tambah Tugas
-        </button>
-      </header>
+    <section className="page">
+      <Filters value={filters} onChange={onFiltersChange} categories={categories} />
 
-      <Filters
-        value={filters}
-        onChange={onFiltersChange}
-        categories={categories}
-      />
-
-      {loading && <p className="state inline-state">Memuat tugas...</p>}
-
-      {error && (
-        <div className="state error-state">
-          <p>{error}</p>
-          <button type="button" className="button secondary" onClick={onRetry}>
-            Coba lagi
-          </button>
+      {loading && (
+        <div className="kanban-wrapper">
+          <div className="kanban-board">
+            {STATUSES.map((status) => (
+              <div key={status} className="kanban-column">
+                <div className="kanban-column-header">
+                  <SkeletonCard />
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
-      <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-        <div className="kanban-board">
-          {visibleStatuses.map((status) => (
-            <KanbanColumn
-              key={status}
-              status={status}
-              tasks={tasks.filter((task) => task.status === status)}
-              onEdit={onEdit}
-              onDelete={onDelete}
-            />
-          ))}
+      {error && (
+        <div className="empty-state">
+          <div className="empty-state-title">Gagal memuat tugas</div>
+          <p className="empty-state-text">{error}</p>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <Button variant="secondary" onClick={onRetry}>
+              Coba lagi
+            </Button>
+            <Button variant="primary" onClick={onAdd}>
+              Tambah Tugas
+            </Button>
+          </div>
         </div>
-      </DndContext>
+      )}
+
+      {!loading && !error && (
+        <div className="kanban-wrapper">
+          <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+            <div className="kanban-board">
+              {visibleStatuses.map((status) => (
+                <KanbanColumn
+                  key={status}
+                  status={status}
+                  tasks={tasks.filter((task) => task.status === status)}
+                  onEdit={onEdit}
+                  onDelete={onDelete}
+                />
+              ))}
+            </div>
+          </DndContext>
+        </div>
+      )}
     </section>
   );
 }

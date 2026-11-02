@@ -1,5 +1,6 @@
 import { PRIORITY_OPTIONS, STATUS_OPTIONS } from '../labels.js';
 import { DEFAULT_FILTERS } from '../constants.js';
+import Button from './ui/Button.jsx';
 
 export default function Filters({ value, onChange, categories, showStatus = true }) {
   function update(field, fieldValue) {
@@ -7,22 +8,24 @@ export default function Filters({ value, onChange, categories, showStatus = true
   }
 
   return (
-    <div className="filters">
-      <label className="field search-field">
-        <span>Cari</span>
+    <div className="toolbar">
+      <div className="toolbar-group" style={{ flex: '1 1 260px' }}>
         <input
           type="search"
+          className="toolbar-input"
           value={value.search}
           onChange={(event) => update('search', event.target.value)}
           placeholder="Cari judul atau deskripsi..."
+          aria-label="Cari tugas"
         />
-      </label>
+      </div>
 
-      <label className="field">
-        <span>Kategori</span>
+      <div className="toolbar-group">
         <select
+          className="toolbar-select"
           value={value.category_id}
           onChange={(event) => update('category_id', event.target.value)}
+          aria-label="Filter kategori"
         >
           <option value="all">Semua kategori</option>
           {categories.map((category) => (
@@ -32,14 +35,13 @@ export default function Filters({ value, onChange, categories, showStatus = true
           ))}
           <option value="none">Tanpa Kategori</option>
         </select>
-      </label>
 
-      {showStatus && (
-        <label className="field">
-          <span>Status</span>
+        {showStatus && (
           <select
+            className="toolbar-select"
             value={value.status}
             onChange={(event) => update('status', event.target.value)}
+            aria-label="Filter status"
           >
             <option value="all">Semua status</option>
             {STATUS_OPTIONS.map((option) => (
@@ -48,14 +50,13 @@ export default function Filters({ value, onChange, categories, showStatus = true
               </option>
             ))}
           </select>
-        </label>
-      )}
+        )}
 
-      <label className="field">
-        <span>Prioritas</span>
         <select
+          className="toolbar-select"
           value={value.priority}
           onChange={(event) => update('priority', event.target.value)}
+          aria-label="Filter prioritas"
         >
           <option value="all">Semua prioritas</option>
           {PRIORITY_OPTIONS.map((option) => (
@@ -64,26 +65,21 @@ export default function Filters({ value, onChange, categories, showStatus = true
             </option>
           ))}
         </select>
-      </label>
 
-      <label className="field">
-        <span>Urutkan</span>
         <select
+          className="toolbar-select"
           value={value.sort}
           onChange={(event) => update('sort', event.target.value)}
+          aria-label="Urutkan tugas"
         >
           <option value="created_desc">Terbaru dibuat</option>
           <option value="deadline_asc">Tenggat terdekat</option>
         </select>
-      </label>
 
-      <button
-        type="button"
-        className="button ghost reset-filters"
-        onClick={() => onChange({ ...DEFAULT_FILTERS })}
-      >
-        Atur Ulang
-      </button>
+        <Button variant="ghost" size="small" onClick={() => onChange({ ...DEFAULT_FILTERS })}>
+          Atur Ulang
+        </Button>
+      </div>
     </div>
   );
 }

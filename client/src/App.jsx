@@ -2,19 +2,33 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from './api.js';
 import { DEFAULT_FILTERS } from './constants.js';
 import { statusLabel } from './labels.js';
+import AppShell from './components/AppShell.jsx';
 import CategoriesView from './components/CategoriesView.jsx';
 import ConfirmDialog from './components/ConfirmDialog.jsx';
 import Dashboard from './components/Dashboard.jsx';
+import Icon from './components/Icon.jsx';
 import KanbanBoard from './components/KanbanBoard.jsx';
 import TaskList from './components/TaskList.jsx';
 import TaskModal from './components/TaskModal.jsx';
 
-const VIEWS = [
-  { id: 'dashboard', label: 'Dashboard' },
-  { id: 'list', label: 'Daftar Tugas' },
-  { id: 'kanban', label: 'Kanban' },
-  { id: 'categories', label: 'Kategori' },
-];
+const VIEW_TITLES = {
+  dashboard: {
+    title: 'Dashboard',
+    subtitle: 'Ringkasan seluruh tugas tanpa pengaruh filter tampilan.',
+  },
+  list: {
+    title: 'Daftar Tugas',
+    subtitle: 'Tugas dikelompokkan berdasarkan kategori dengan filter dan pencarian.',
+  },
+  kanban: {
+    title: 'Kanban',
+    subtitle: 'Atur status tugas dengan seret dan letakkan antar kolom.',
+  },
+  categories: {
+    title: 'Kategori',
+    subtitle: 'Kelola kategori tugas dan perlakuan setelah penghapusan.',
+  },
+};
 
 export default function App() {
   const [view, setView] = useState('dashboard');
@@ -45,6 +59,7 @@ export default function App() {
 
   const isTaskView = view === 'list' || view === 'kanban';
   const activeFilters = view === 'list' ? listFilters : kanbanFilters;
+  const viewMeta = VIEW_TITLES[view] ?? VIEW_TITLES.dashboard;
 
   useEffect(() => {
     if (!toast) {
@@ -247,100 +262,84 @@ export default function App() {
         : '';
 
   return (
-    <div className="app-shell">
-      <header className="app-header">
-        <div className="brand">
-          <span className="brand-mark" aria-hidden="true">
-            MT
-          </span>
-          <div>
-            <h1>Manajer Tugas Pribadi</h1>
-            <p>Kelola tugas, kategori, dan progres dalam satu tempat.</p>
-          </div>
+    <AppShell
+      view={view}
+      onViewChange={changeView}
+      header={
+        <div className="page-header-content">
+          <span className="page-eyebrow">Personal Task Manager</span>
+          <h1 className="page-title">{viewMeta.title}</h1>
+          <p className="page-subtitle">{viewMeta.subtitle}</p>
         </div>
-
-        <button type="button" className="button primary" onClick={openCreateTask}>
+      }
+      actions={
+        <button
+          type="button"
+          className="button button-primary"
+          onClick={openCreateTask}
+        >
+          <Icon name="plus" size={18} />
           Tambah Tugas
         </button>
-      </header>
+      }
+    >
+      {view === 'dashboard' && (
+        <Dashboard
+          stats={stats}
+          loading={statsLoading}
+          error={statsError}
+          onRetry={refresh}
+        />
+      )}
 
-      <nav className="tabs" aria-label="Navigasi utama">
-        {VIEWS.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={`tab${view === item.id ? ' active' : ''}`}
-            onClick={() => changeView(item.id)}
-            aria-current={view === item.id ? 'page' : undefined}
-          >
-            {item.label}
-          </button>
+      {view === 'list' && (
+        <TaskList
+          tasks={tasks}
+          categories={categories}
+          filters={listFilters}
+          onFiltersChange={setListFilters}
+          loading={tasksLoading}
+          error={tasksError}
+          onRetry={refresh}
+          onAdd={openCreateTask}
+          onEdit={openEditTask}
+          onDelete={requestDeleteTask}
+        />
+      )}
+
+      {view === 'kanban' && (
+        <KanbanBoard
+          tasks={tasks}
+          categories={categories}
+          filters={kanbanFilters}
+          onFiltersChange={setKanbanFilters}
+          loading={tasksLoading}
+          error={tasksError}
+          onRetry={refresh}
+          onAdd={openCreateTask}
+          onEdit={openEditTask}
+          onDelete={requestDeleteTask}
+          onStatusChange={changeTaskStatus}
+        />
+      )}
+
+      {view === 'categories' &&
+        (categoriesLoading && categories.length === 0 ? (
+          <p className="state">Memuat kategori...</p>
+        ) : categoriesError ? (
+          <div className="state error-state">
+            <p>{categoriesError}</p>
+            <button type="button" className="button button-secondary" onClick={refresh}>
+              Coba lagi
+            </button>
+          </div>
+        ) : (
+          <CategoriesView
+            categories={categories}
+            onChanged={refresh}
+            onRequestDelete={requestDeleteCategory}
+          />
         ))}
-      </nav>
-
-      <main className="app-main">
-        {view === 'dashboard' && (
-          <Dashboard
-            stats={stats}
-            loading={statsLoading}
-            error={statsError}
-            onRetry={refresh}
-          />
-        )}
-
-        {view === 'list' && (
-          <TaskList
-            tasks={tasks}
-            categories={categories}
-            filters={listFilters}
-            onFiltersChange={setListFilters}
-            loading={tasksLoading}
-            error={tasksError}
-            onRetry={refresh}
-            onAdd={openCreateTask}
-            onEdit={openEditTask}
-            onDelete={requestDeleteTask}
-          />
-        )}
-
-        {view === 'kanban' && (
-          <KanbanBoard
-            tasks={tasks}
-            categories={categories}
-            filters={kanbanFilters}
-            onFiltersChange={setKanbanFilters}
-            loading={tasksLoading}
-            error={tasksError}
-            onRetry={refresh}
-            onAdd={openCreateTask}
-            onEdit={openEditTask}
-            onDelete={requestDeleteTask}
-            onStatusChange={changeTaskStatus}
-          />
-        )}
-
-        {view === 'categories' &&
-          (categoriesLoading && categories.length === 0 ? (
-            <p className="state">Memuat kategori...</p>
-          ) : categoriesError ? (
-            <div className="state error-state">
-              <p>{categoriesError}</p>
-              <button
-                type="button"
-                className="button secondary"
-                onClick={refresh}
-              >
-                Coba lagi
-              </button>
-            </div>
-          ) : (
-            <CategoriesView
-              categories={categories}
-              onChanged={refresh}
-              onRequestDelete={requestDeleteCategory}
-            />
-          ))}
-      </main>
 
       {taskModal.open && (
         <TaskModal
@@ -361,10 +360,10 @@ export default function App() {
       />
 
       {toast && (
-        <div className="toast" role="status">
-          {toast}
+        <div className="toast-stack" role="status" aria-live="polite">
+          <div className="toast toast-success">{toast}</div>
         </div>
       )}
-    </div>
+    </AppShell>
   );
 }

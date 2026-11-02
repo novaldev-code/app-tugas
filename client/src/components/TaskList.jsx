@@ -1,60 +1,27 @@
 import { useMemo } from 'react';
-import {
-  formatDate,
-  priorityClass,
-  priorityLabel,
-  statusClass,
-  statusLabel,
-} from '../labels.js';
 import { hasActiveFilters } from '../constants.js';
 import { groupTasks } from '../grouping.js';
 import Filters from './Filters.jsx';
+import TaskActions from './task/TaskActions.jsx';
+import TaskBadges from './task/TaskBadges.jsx';
+import TaskMeta from './task/TaskMeta.jsx';
+import EmptyState from './ui/EmptyState.jsx';
+import { SkeletonCard } from './ui/Skeleton.jsx';
 
 function TaskItem({ task, onEdit, onDelete }) {
   return (
     <article className="task-card">
-      <div className="task-card-main">
-        <div className="task-card-title-row">
-          <h4>{task.title}</h4>
-          <span className={`badge ${statusClass(task.status)}`}>
-            {statusLabel(task.status)}
-          </span>
+      <div className="task-card-content">
+        <div>
+          <div className="task-card-title">{task.title}</div>
+          {task.description && <p className="task-description">{task.description}</p>}
         </div>
-
-        {task.description && <p className="task-description">{task.description}</p>}
-
-        <div className="task-meta">
-          <span className={`badge ${priorityClass(task.priority)}`}>
-            {priorityLabel(task.priority)}
-          </span>
-
-          {task.deadline ? (
-            <span className={task.overdue ? 'deadline overdue' : 'deadline'}>
-              Tenggat: {formatDate(task.deadline)}
-              {task.overdue ? ' - Terlambat' : ''}
-            </span>
-          ) : (
-            <span className="muted">Tanpa tenggat</span>
-          )}
+        <TaskBadges status={task.status} priority={task.priority} />
+        <div className="task-card-meta">
+          <TaskMeta deadline={task.deadline} overdue={task.overdue} />
         </div>
       </div>
-
-      <div className="task-actions">
-        <button
-          type="button"
-          className="button small secondary"
-          onClick={() => onEdit(task)}
-        >
-          Ubah
-        </button>
-        <button
-          type="button"
-          className="button small danger-ghost"
-          onClick={() => onDelete(task)}
-        >
-          Hapus
-        </button>
-      </div>
+      <TaskActions onEdit={() => onEdit(task)} onDelete={() => onDelete(task)} />
     </article>
   );
 }
@@ -75,48 +42,38 @@ export default function TaskList({
   const filtersActive = hasActiveFilters(filters);
 
   return (
-    <section className="task-list-view">
-      <header className="section-heading">
-        <div>
-          <h2>Daftar Tugas</h2>
-          <p>Tugas dikelompokkan berdasarkan kategori.</p>
+    <section className="page">
+      <Filters value={filters} onChange={onFiltersChange} categories={categories} />
+
+      {loading && (
+        <div className="task-list-grid">
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
         </div>
-        <button type="button" className="button primary" onClick={onAdd}>
-          Tambah Tugas
-        </button>
-      </header>
-
-      <Filters
-        value={filters}
-        onChange={onFiltersChange}
-        categories={categories}
-      />
-
-      {loading && <p className="state inline-state">Memuat tugas...</p>}
+      )}
 
       {error && (
-        <div className="state error-state">
-          <p>{error}</p>
-          <button type="button" className="button secondary" onClick={onRetry}>
+        <div className="empty-state">
+          <div className="empty-state-title">Gagal memuat tugas</div>
+          <p className="empty-state-text">{error}</p>
+          <button type="button" className="button button-secondary" onClick={onRetry}>
             Coba lagi
           </button>
         </div>
       )}
 
       {!loading && !error && groups.length === 0 && (
-        <div className="empty-state">
-          <h3>{filtersActive ? 'Tidak ada tugas yang cocok' : 'Belum ada tugas'}</h3>
-          <p>
-            {filtersActive
+        <EmptyState
+          title={filtersActive ? 'Tidak ada tugas yang cocok' : 'Belum ada tugas'}
+          description={
+            filtersActive
               ? 'Coba ubah atau atur ulang filter untuk melihat tugas lain.'
-              : 'Tambahkan tugas pertama untuk mulai mengelola pekerjaan.'}
-          </p>
-          {!filtersActive && (
-            <button type="button" className="button primary" onClick={onAdd}>
-              Tambah Tugas
-            </button>
-          )}
-        </div>
+              : 'Tambahkan tugas pertama untuk mulai mengelola pekerjaan.'
+          }
+          actionLabel={!filtersActive ? 'Tambah Tugas' : undefined}
+          onAction={!filtersActive ? onAdd : undefined}
+        />
       )}
 
       {!error && groups.length > 0 && (
@@ -124,11 +81,11 @@ export default function TaskList({
           {groups.map((group) => (
             <section className="task-group" key={group.key}>
               <header className="task-group-header">
-                <h3>{group.name}</h3>
-                <span className="count">{group.tasks.length}</span>
+                <h3 className="task-group-title">{group.name}</h3>
+                <span className="task-group-count">{group.tasks.length}</span>
               </header>
 
-              <div className="task-list">
+              <div className="task-list-grid">
                 {group.tasks.map((task) => (
                   <TaskItem
                     key={task.id}

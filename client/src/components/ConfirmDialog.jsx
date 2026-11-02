@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import useFocusTrap from '../hooks/useFocusTrap.js';
 
 export default function ConfirmDialog({
   open,
@@ -10,20 +10,7 @@ export default function ConfirmDialog({
   onCancel,
   onConfirm,
 }) {
-  useEffect(() => {
-    if (!open) {
-      return undefined;
-    }
-
-    function handleKeyDown(event) {
-      if (event.key === 'Escape' && !busy) {
-        onCancel();
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [open, busy, onCancel]);
+  const trapRef = useFocusTrap({ active: open, onClose: () => !busy && onCancel() });
 
   if (!open) {
     return null;
@@ -40,17 +27,21 @@ export default function ConfirmDialog({
       }}
     >
       <div
+        ref={trapRef}
         className="modal confirm-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="confirm-dialog-title"
+        tabIndex={-1}
       >
-        <h2 id="confirm-dialog-title">{title}</h2>
-        <p>{message}</p>
-        <div className="modal-actions">
+        <div className="modal-body">
+          <h2 id="confirm-dialog-title">{title}</h2>
+          <p>{message}</p>
+        </div>
+        <div className="modal-footer">
           <button
             type="button"
-            className="button secondary"
+            className="button button-secondary"
             onClick={onCancel}
             disabled={busy}
           >
@@ -58,7 +49,7 @@ export default function ConfirmDialog({
           </button>
           <button
             type="button"
-            className="button danger"
+            className="button button-danger"
             onClick={onConfirm}
             disabled={busy}
           >

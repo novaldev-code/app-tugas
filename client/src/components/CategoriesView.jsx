@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { api } from '../api.js';
+import Button from './ui/Button.jsx';
+import Badge from './ui/Badge.jsx';
 
 function validateName(value) {
   const name = value.trim();
@@ -85,92 +87,79 @@ export default function CategoriesView({ categories, onChanged, onRequestDelete 
   }
 
   return (
-    <section className="categories-view">
-      <header className="section-heading">
-        <div>
-          <h2>Kategori</h2>
-          <p>
-            Kategori bawaan dapat diubah atau dihapus. Tugas pada kategori yang
-            dihapus akan menjadi Tanpa Kategori.
-          </p>
+    <section className="page">
+      <div className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>Manajemen Kategori</h2>
+            <p className="page-subtitle">
+              Kategori bawaan dapat diubah atau dihapus. Tugas pada kategori yang dihapus akan menjadi Tanpa Kategori.
+            </p>
+          </div>
         </div>
-      </header>
+        <div className="panel-body">
+          {error && <div className="alert error">{error}</div>}
+          {fieldError && !editingId && <div className="alert error">{fieldError}</div>}
 
-      {error && <p className="alert error">{error}</p>}
-      {fieldError && !editingId && (
-        <p className="alert error">{fieldError}</p>
-      )}
+          <form className="category-form" onSubmit={handleAdd}>
+            <input
+              type="text"
+              value={newName}
+              onChange={(event) => setNewName(event.target.value)}
+              placeholder="Nama kategori baru"
+              maxLength={50}
+              aria-label="Nama kategori baru"
+              style={{ maxWidth: '320px' }}
+            />
+            <Button type="submit" variant="primary" disabled={busy}>
+              {busy && !editingId ? 'Menambahkan...' : 'Tambah Kategori'}
+            </Button>
+          </form>
 
-      <form className="inline-form" onSubmit={handleAdd}>
-        <input
-          type="text"
-          value={newName}
-          onChange={(event) => setNewName(event.target.value)}
-          placeholder="Nama kategori baru"
-          maxLength={50}
-          aria-label="Nama kategori baru"
-        />
-        <button type="submit" className="button primary" disabled={busy}>
-          {busy && !editingId ? 'Menambahkan...' : 'Tambah Kategori'}
-        </button>
-      </form>
+          <div className="category-list">
+            {categories.map((category) => (
+              <div className="category-row" key={category.id}>
+                {editingId === category.id ? (
+                  <form className="category-form" onSubmit={handleSave} style={{ flex: 1 }}>
+                    <input
+                      type="text"
+                      value={editingName}
+                      onChange={(event) => setEditingName(event.target.value)}
+                      maxLength={50}
+                      aria-label={`Ubah nama kategori ${category.name}`}
+                      autoFocus
+                      style={{ maxWidth: '280px' }}
+                    />
+                    <Button type="submit" variant="primary" size="small" disabled={busy}>
+                      Simpan
+                    </Button>
+                    <Button type="button" variant="secondary" size="small" onClick={cancelEditing} disabled={busy}>
+                      Batal
+                    </Button>
+                    {fieldError && <span className="field-error">{fieldError}</span>}
+                  </form>
+                ) : (
+                  <>
+                    <div className="category-name-group">
+                      <span className="task-card-title">{category.name}</span>
+                      {category.is_default && <Badge tone="default">Bawaan</Badge>}
+                    </div>
 
-      <ul className="category-list">
-        {categories.map((category) => (
-          <li className="category-row" key={category.id}>
-            {editingId === category.id ? (
-              <form className="category-edit-form" onSubmit={handleSave}>
-                <input
-                  type="text"
-                  value={editingName}
-                  onChange={(event) => setEditingName(event.target.value)}
-                  maxLength={50}
-                  aria-label={`Ubah nama kategori ${category.name}`}
-                  autoFocus
-                />
-                <button type="submit" className="button small primary" disabled={busy}>
-                  Simpan
-                </button>
-                <button
-                  type="button"
-                  className="button small secondary"
-                  onClick={cancelEditing}
-                  disabled={busy}
-                >
-                  Batal
-                </button>
-                {fieldError && <span className="field-error">{fieldError}</span>}
-              </form>
-            ) : (
-              <>
-                <div className="category-name">
-                  <span>{category.name}</span>
-                  {category.is_default && (
-                    <span className="badge default-badge">Bawaan</span>
-                  )}
-                </div>
-
-                <div className="task-actions">
-                  <button
-                    type="button"
-                    className="button small secondary"
-                    onClick={() => startEditing(category)}
-                  >
-                    Ubah
-                  </button>
-                  <button
-                    type="button"
-                    className="button small danger-ghost"
-                    onClick={() => onRequestDelete(category)}
-                  >
-                    Hapus
-                  </button>
-                </div>
-              </>
-            )}
-          </li>
-        ))}
-      </ul>
+                    <div className="category-actions">
+                      <Button type="button" variant="secondary" size="small" onClick={() => startEditing(category)}>
+                        Ubah
+                      </Button>
+                      <Button type="button" variant="danger-ghost" size="small" onClick={() => onRequestDelete(category)}>
+                        Hapus
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
     </section>
   );
 }
