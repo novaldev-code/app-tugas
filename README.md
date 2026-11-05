@@ -223,6 +223,7 @@ Script database dapat dipanggil dari root workspace:
 ```bash
 npm run db:generate   # generate migration Drizzle
 npm run db:migrate    # terapkan migration memakai DATABASE_URL_UNPOOLED
+npm run db:migrate:status -w server  # cek migration applied/pending (read-only)
 npm run db:import -- --dry-run
 npm run db:import -- --replace
 npm run db:studio     # buka Drizzle Studio
@@ -230,6 +231,8 @@ npm run migrate       # alias db:migrate
 ```
 
 ## Deployment Neon, Render, dan Vercel
+
+Panduan langkah demi langkah, konfigurasi cookie production, dan checklist manual tersedia di [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
 Deployment ini menjalankan aplikasi multi-user dengan autentikasi. Backend boleh diakses publik hanya melalui HTTPS dan seluruh endpoint data mewajibkan sesi valid; gunakan topologi cookie first-party. Vercel menyajikan landing dan workspace; `/app` diarahkan ke `/login` bila belum ada sesi.
 

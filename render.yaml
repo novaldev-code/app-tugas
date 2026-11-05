@@ -1,0 +1,33 @@
+# Render Blueprint untuk backend Express 5.
+# Terapkan dari Render Dashboard → Blueprint, lalu isi environment bertanda sync: false.
+services:
+  - type: web
+    name: personal-task-manager-api
+    runtime: node
+    # Ubah plan sesuai kebutuhan. Starter direkomendasikan untuk production
+    # agar service tidak tidur seperti pada plan free.
+    plan: starter
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    preDeployCommand: npm run db:migrate
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_URL_UNPOOLED
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false
+      - key: SESSION_TTL_HOURS
+        value: "168"
+      - key: AUTH_COOKIE_SECURE
+        value: "true"
+      - key: AUTH_COOKIE_SAME_SITE
+        value: Lax
+      - key: AUTH_COOKIE_NAME
+        value: ptm_session

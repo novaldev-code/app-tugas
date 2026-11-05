@@ -17,7 +17,8 @@
     "db:generate": "npm run db:generate -w server --",
     "db:migrate": "npm run db:migrate -w server",
     "db:import": "npm run db:import -w server --",
-    "db:studio": "npm run db:studio -w server --"
+    "db:studio": "npm run db:studio -w server --",
+    "db:migrate:status": "npm run db:migrate:status -w server"
   },
   "devDependencies": {
     "concurrently": "^10.0.6"
