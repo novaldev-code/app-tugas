@@ -249,11 +249,12 @@ Deployment ini menjalankan aplikasi multi-user dengan autentikasi. Backend boleh
 
 Konfigurasi Web Service di dashboard Render:
 
-- Build Command: `npm ci`
+- Build Command: `npm ci --omit=dev`
 - Start Command: `npm start`
-- Pre-Deploy Command: `npm run db:migrate`
 - Health Check Path: `/api/health`
 - Root Directory: root repository monorepo
+- Plan: Free (dapat tidur saat tidak ada traffic)
+- Pre-Deploy Command: kosong; initial migration production sudah diterapkan
 - Akses jaringan: HTTPS publik diperbolehkan karena seluruh endpoint data mewajibkan sesi valid; pastikan CORS dan topologi cookie first-party benar.
 
 Environment backend yang wajib diisi:
@@ -265,7 +266,7 @@ Environment backend yang wajib diisi:
 - `SESSION_TTL_HOURS`, `AUTH_COOKIE_SECURE`, `AUTH_COOKIE_SAME_SITE`, dan `AUTH_COOKIE_NAME` sesuai topologi cookie
 - `PORT` hanya jika platform tidak menyediakan port otomatis
 
-Migration harus berhasil sebelum backend menerima traffic. Pre-deploy command memakai koneksi langsung; runtime hanya memakai koneksi pooled dan tidak menjalankan migration. Jalankan cutover importer sesuai bagian [Impor Data SQLite (Cutover)](#impor-data-sqlite-cutover) sebelum mengaktifkan traffic pengguna.
+Migration production sudah diterapkan. Service tidak menjalankan migration otomatis; gunakan `npm run db:migrate:status -w server` secara manual dengan koneksi direct hanya untuk pemeriksaan read-only. Runtime menggunakan koneksi pooled dan tidak menjalankan migration.
 
 ### Frontend Vercel
 
@@ -310,8 +311,8 @@ Build publik tetap menampilkan landing. `/app` hanya menampilkan workspace jika 
 
 1. Buat snapshot/branch Neon dan siapkan `DATABASE_URL` pooled serta `DATABASE_URL_UNPOOLED` langsung.
 2. Set environment backend di Render, termasuk `CORS_ORIGIN` eksplisit, `NODE_ENV=production`, dan variabel sesi/cookie.
-3. Jalankan `npm run db:migrate` sebagai pre-deploy dan pastikan migration selesai sebelum backend menerima traffic.
-4. Jalankan cutover importer dan verifikasi data sesuai bagian impor.
+3. Pastikan initial migration production sudah selesai; jangan mengaktifkan pre-deploy migration otomatis.
+4. Jangan menjalankan importer SQLite pada production.
 5. Deploy backend dengan HTTPS dan health check `/api/health`.
 6. Build frontend Vercel dengan output `dist`, SPA fallback, dan rewrite/proxy `/api` same-origin atau domain same-site untuk cookie first-party.
 7. Verifikasi CORS dari origin yang diizinkan, credentials aktif, dan origin lain tidak mendapat header CORS.

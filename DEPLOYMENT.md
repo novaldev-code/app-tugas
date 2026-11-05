@@ -101,17 +101,18 @@ Pastikan tidak ada migration pending.
 
 ## 3. Render — backend
 
-Blueprint tersedia di `render.yaml`. Alternatif manual di dashboard:
+Blueprint tersedia di `render.yaml` dengan plan **Free**. Alternatif manual di dashboard:
 
 - Service type: **Web Service**
 - Runtime: **Node**
 - Root Directory: repository root
 - Build Command: `npm ci --omit=dev`
 - Start Command: `npm start`
-- Pre-Deploy Command: `npm run db:migrate`
 - Health Check Path: `/api/health`
-- Auto-Deploy: branch production dari GitHub
-- Plan: pilih sesuai kebutuhan; `starter` direkomendasikan untuk production agar tidak tidur
+- Auto-Deploy: branch `main` dari GitHub
+- Plan: **Free**
+
+Initial migration production sudah diterapkan. **Jangan** menambahkan pre-deploy migration pada service ini. Jika perlu memeriksa status, jalankan `npm run db:migrate:status -w server` secara manual dengan koneksi direct.
 
 Environment backend:
 
@@ -130,7 +131,8 @@ Environment backend:
 Catatan:
 
 - Render menyediakan `PORT` otomatis.
-- Pre-deploy migration memakai `DATABASE_URL_UNPOOLED`; pastikan koneksi direct Neon dapat diakses dari Render.
+- Free web service dapat tidur saat tidak ada traffic; cold start pertama bisa lebih lambat.
+- Migration production sudah selesai; jalankan hanya status read-only bila diperlukan.
 - Jangan mengisi `CORS_ORIGIN` dengan `*`.
 - Tambahkan custom domain `api.example.com` jika memakai Opsi A.
 - `AUTH_COOKIE_SECURE=true` wajib untuk production (HTTPS).

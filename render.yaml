@@ -1,15 +1,13 @@
 # Render Blueprint untuk backend Express 5.
-# Terapkan dari Render Dashboard → Blueprint, lalu isi environment bertanda sync: false.
+# Initial migration production sudah diterapkan. Blueprint ini tidak menjalankan
+# migration otomatis; gunakan db:migrate:status secara manual bila perlu.
 services:
   - type: web
     name: personal-task-manager-api
     runtime: node
-    # Ubah plan sesuai kebutuhan. Starter direkomendasikan untuk production
-    # agar service tidak tidur seperti pada plan free.
-    plan: starter
+    plan: free
     buildCommand: npm ci --omit=dev
     startCommand: npm start
-    preDeployCommand: npm run db:migrate
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:
