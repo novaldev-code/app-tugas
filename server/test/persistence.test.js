@@ -1,31 +1,92 @@
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import request from 'supertest';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
-import { createDatabase } from '../src/db.js';
-import { runMigrations } from '../src/migrate.js';
+import {
+  closePostgresPool,
+  createPostgresDb,
+  createPostgresPool,
+} from '../src/db.js';
+import {
+  resetTestSchema,
+  runTestMigrations,
+  testConfig,
+  truncateTestTables,
+} from './helpers/test-db.js';
 
-let tempDir;
-let dbPath;
+const allowedOrigin = 'http://localhost:5173';
 
-beforeEach(() => {
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ptm-persistence-'));
-  dbPath = path.join(tempDir, 'tasks.db');
+let pools;
+let app;
+let auth;
+
+function createTestApp() {
+  const pool = createPostgresPool({
+    connectionString: testConfig.databaseUrl,
+    max: 1,
+    connectionTimeoutMillis: 15000,
+  });
+  pools.push(pool);
+
+  return createApp(createPostgresDb(pool), {
+    corsOrigins: [allowedOrigin],
+  });
+}
+
+function client(targetApp = app) {
+  const withAuth = (req) =>
+    req
+      .set('Cookie', auth.cookie)
+      .set('Origin', allowedOrigin)
+      .set('X-CSRF-Token', auth.csrfToken);
+
+  return {
+    get: (path) => request(targetApp).get(path).set('Cookie', auth.cookie),
+    post: (path) => withAuth(request(targetApp).post(path)),
+    patch: (path) => withAuth(request(targetApp).patch(path)),
+    delete: (path) => withAuth(request(targetApp).delete(path)),
+  };
+}
+
+async function registerUser(email = 'persist@example.com') {
+  const response = await request(app)
+    .post('/api/auth/register')
+    .set('Origin', allowedOrigin)
+    .send({ email, password: 'password123' })
+    .expect(201);
+
+  return {
+    cookie: response.headers['set-cookie'][0].split(';')[0],
+    csrfToken: response.body.data.csrf_token,
+  };
+}
+
+beforeAll(async () => {
+  await resetTestSchema();
+  await runTestMigrations();
 });
 
-afterEach(() => {
-  fs.rmSync(tempDir, { recursive: true, force: true });
+beforeEach(async () => {
+  pools = [];
+  await truncateTestTables();
+  app = createTestApp();
+  auth = await registerUser();
+});
+
+afterEach(async () => {
+  for (const pool of pools) {
+    await closePostgresPool(pool);
+  }
+
+  pools = [];
+});
+
+afterAll(async () => {
+  await resetTestSchema();
 });
 
 describe('persistence', () => {
-  it('keeps tasks and renamed default categories after restart', async () => {
-    let db = createDatabase(dbPath);
-    runMigrations(db);
-    let app = createApp(db);
-
-    const renamed = await request(app)
+  it('keeps tasks and renamed default categories after reconnecting', async () => {
+    const renamed = await client()
       .patch('/api/categories/1')
       .send({ name: 'Keluarga' })
       .expect(200);
@@ -35,18 +96,15 @@ describe('persistence', () => {
       is_default: true,
     });
 
-    await request(app)
+    await client()
       .post('/api/tasks')
       .send({ title: 'Tugas persisten', priority: 'High', category_id: 1 })
       .expect(201);
 
-    db.close();
+    await closePostgresPool(pools[0]);
+    app = createTestApp();
 
-    db = createDatabase(dbPath);
-    runMigrations(db);
-    app = createApp(db);
-
-    const categories = await request(app).get('/api/categories').expect(200);
+    const categories = await client().get('/api/categories').expect(200);
 
     expect(categories.body.data).toHaveLength(3);
     expect(categories.body.data[0]).toMatchObject({
@@ -54,14 +112,12 @@ describe('persistence', () => {
       is_default: true,
     });
 
-    const tasks = await request(app).get('/api/tasks').expect(200);
+    const tasks = await client().get('/api/tasks').expect(200);
 
     expect(tasks.body.data).toHaveLength(1);
     expect(tasks.body.data[0]).toMatchObject({
       title: 'Tugas persisten',
       category_name: 'Keluarga',
     });
-
-    db.close();
   });
 });

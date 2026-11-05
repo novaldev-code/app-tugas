@@ -1,13 +1,73 @@
+const defaultApiBaseUrl = import.meta.env?.VITE_API_URL ?? '';
+
+let csrfToken = '';
+let authExpiredHandler = null;
+
+export function normalizeApiBaseUrl(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return '';
+  }
+
+  return trimmed.replace(/\/+$/, '');
+}
+
+export function resolveApiUrl(path, baseUrl = defaultApiBaseUrl) {
+  const base = normalizeApiBaseUrl(baseUrl);
+
+  if (!base) {
+    return path;
+  }
+
+  return `${base}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
+export function setCsrfToken(value) {
+  csrfToken = typeof value === 'string' ? value : '';
+}
+
+export function getCsrfToken() {
+  return csrfToken;
+}
+
+export function setAuthExpiredHandler(handler) {
+  authExpiredHandler = typeof handler === 'function' ? handler : null;
+}
+
+function applyAuth(data) {
+  setCsrfToken(data?.csrf_token);
+  return data;
+}
+
 async function request(path, options = {}) {
-  const response = await fetch(path, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
-    ...options,
+  const { skipAuthExpired = false, ...fetchOptions } = options;
+  const method = (fetchOptions.method ?? 'GET').toUpperCase();
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(fetchOptions.headers ?? {}),
+  };
+
+  if (method !== 'GET' && csrfToken) {
+    headers['X-CSRF-Token'] = csrfToken;
+  }
+
+  const response = await fetch(resolveApiUrl(path), {
+    credentials: 'include',
+    ...fetchOptions,
+    headers,
   });
 
   const body = await response.json().catch(() => ({}));
+
+  if (response.status === 401 && !skipAuthExpired) {
+    setCsrfToken('');
+    authExpiredHandler?.();
+  }
 
   if (!response.ok || body.success === false) {
     const error = new Error(body.message || 'Terjadi kesalahan.');
@@ -47,6 +107,33 @@ function taskQuery(filters) {
 }
 
 export const api = {
+  register(payload) {
+    return request('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      skipAuthExpired: true,
+    }).then(applyAuth);
+  },
+
+  login(payload) {
+    return request('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      skipAuthExpired: true,
+    }).then(applyAuth);
+  },
+
+  logout() {
+    return request('/api/auth/logout', {
+      method: 'POST',
+      skipAuthExpired: true,
+    }).finally(() => setCsrfToken(''));
+  },
+
+  me() {
+    return request('/api/auth/me', { skipAuthExpired: true }).then(applyAuth);
+  },
+
   listTasks(filters, signal) {
     return request(`/api/tasks${taskQuery(filters)}`, { signal });
   },

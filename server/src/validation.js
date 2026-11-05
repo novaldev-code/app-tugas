@@ -126,6 +126,24 @@ export function normalizeCategoryId(value) {
   return id;
 }
 
+export function normalizeEmail(value) {
+  if (typeof value !== 'string') {
+    throw fieldError('email', 'Email tidak valid.');
+  }
+
+  const email = value.trim().toLowerCase();
+
+  if (
+    email.length < 3 ||
+    email.length > 254 ||
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+  ) {
+    throw fieldError('email', 'Email tidak valid.');
+  }
+
+  return email;
+}
+
 export function localDateISO(date = new Date()) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');

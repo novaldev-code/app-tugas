@@ -6,6 +6,7 @@ import {
   normalizeCategoryName,
   normalizeDeadline,
   normalizeDescription,
+  normalizeEmail,
   normalizePriority,
   normalizeStatus,
   normalizeTitle,
@@ -133,6 +134,21 @@ describe('normalizeCategoryId', () => {
   it('rejects invalid ids', () => {
     expect(() => normalizeCategoryId('abc')).toThrow('Kategori tidak valid.');
     expect(() => normalizeCategoryId(0)).toThrow('Kategori tidak valid.');
+  });
+});
+
+describe('normalizeEmail', () => {
+  it('trims and lowercases valid emails', () => {
+    expect(normalizeEmail('  User@Example.COM ')).toBe('user@example.com');
+  });
+
+  it('rejects malformed emails', () => {
+    expect(() => normalizeEmail('not-an-email')).toThrow('Email tidak valid.');
+    expect(() => normalizeEmail('')).toThrow('Email tidak valid.');
+    expect(() => normalizeEmail(123)).toThrow('Email tidak valid.');
+    expect(() => normalizeEmail('a'.repeat(250) + '@example.com')).toThrow(
+      'Email tidak valid.',
+    );
   });
 });
 

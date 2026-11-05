@@ -5,16 +5,27 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
-    "migrate": "node src/migrate-cli.js",
-    "test": "vitest run",
-    "test:unit": "vitest run src/validation.test.js",
-    "test:integration": "vitest run test"
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "node src/migrate-cli.js",
+    "db:import": "node scripts/import-sqlite.js",
+    "db:studio": "drizzle-kit studio",
+    "migrate": "npm run db:migrate",
+    "test": "vitest run --config vitest.config.js",
+    "test:unit": "vitest run --config vitest.config.js src",
+    "test:integration": "vitest run --config vitest.config.js test"
   },
   "dependencies": {
-    "better-sqlite3": "^13.0.3",
-    "express": "^5.3.0"
+    "argon2": "^0.45.2",
+    "cookie": "^0.7.2",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.9",
+    "drizzle-orm": "^0.45.4",
+    "express": "^5.3.0",
+    "pg": "^8.23.1"
   },
   "devDependencies": {
+    "better-sqlite3": "^13.0.3",
+    "drizzle-kit": "^0.31.11",
     "supertest": "^7.3.1",
     "vitest": "^5.0.5"
   }

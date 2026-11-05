@@ -380,9 +380,7 @@
   }
 
   .kanban-board {
-    grid-template-columns: repeat(1, minmax(280px, 1fr));
     padding: 0 var(--space-4) var(--space-6);
-    min-width: 280px;
   }
 }
 
@@ -390,10 +388,6 @@
   .toolbar-input,
   .toolbar-select {
     flex: 1 1 100%;
-  }
-
-  .kanban-board {
-    grid-template-columns: minmax(260px, 1fr);
   }
 }
 

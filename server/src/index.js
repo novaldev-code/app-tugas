@@ -1,20 +1,34 @@
+import 'dotenv/config';
 import { createApp } from './app.js';
-import { createDatabase } from './db.js';
-import { runMigrations } from './migrate.js';
+import { loadServerConfig } from './config.js';
+import {
+  closePostgresPool,
+  createPostgresDb,
+  createPostgresPool,
+} from './db.js';
 
-const db = createDatabase();
-runMigrations(db);
+const config = loadServerConfig();
+const pool = createPostgresPool({ connectionString: config.databaseUrl });
+const db = createPostgresDb(pool);
 
-const app = createApp(db);
-const port = Number(process.env.PORT || 3001);
+const app = createApp(db, {
+  corsOrigins: config.corsOrigins,
+  auth: {
+    cookieName: config.authCookie.name,
+    cookieSecure: config.authCookie.secure,
+    cookieSameSite: config.authCookie.sameSite,
+    sessionTtlHours: config.sessionTtlHours,
+  },
+});
+const port = config.port;
 
 const server = app.listen(port, () => {
   console.log(`Server berjalan di http://localhost:${port}`);
 });
 
 function shutdown() {
-  server.close(() => {
-    db.close();
+  server.close(async () => {
+    await closePostgresPool(pool);
     process.exit(0);
   });
 }

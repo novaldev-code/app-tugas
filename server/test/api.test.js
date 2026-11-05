@@ -1,22 +1,82 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
-import { createDatabase } from '../src/db.js';
-import { runMigrations } from '../src/migrate.js';
+import {
+  closePostgresPool,
+  createPostgresDb,
+  createPostgresPool,
+} from '../src/db.js';
 import { localDateISO } from '../src/validation.js';
+import {
+  resetTestSchema,
+  runTestMigrations,
+  testConfig,
+  truncateTestTables,
+} from './helpers/test-db.js';
 
+const allowedOrigin = 'http://localhost:5173';
+
+let pool;
 let db;
 let app;
+let auth;
+let client;
+let testCounter = 0;
 
-beforeEach(() => {
-  db = createDatabase(':memory:');
-  runMigrations(db);
-  app = createApp(db);
+beforeAll(async () => {
+  await resetTestSchema();
+  await runTestMigrations();
+  pool = createPostgresPool({
+    connectionString: testConfig.databaseUrl,
+    max: 2,
+    connectionTimeoutMillis: 15000,
+  });
+  db = createPostgresDb(pool);
+  app = createApp(db, { corsOrigins: [allowedOrigin] });
 });
 
-afterEach(() => {
-  db.close();
+beforeEach(async () => {
+  await truncateTestTables();
+  testCounter += 1;
+  auth = await registerViaApi(`primary-${testCounter}@example.com`);
+  client = createClient(auth);
 });
+
+afterAll(async () => {
+  await closePostgresPool(pool);
+  await resetTestSchema();
+});
+
+function createClient(session) {
+  const withAuth = (req) =>
+    req
+      .set('Cookie', session.cookie)
+      .set('Origin', allowedOrigin)
+      .set('X-CSRF-Token', session.csrfToken);
+
+  return {
+    get: (path) => request(app).get(path).set('Cookie', session.cookie),
+    post: (path) => withAuth(request(app).post(path)),
+    patch: (path) => withAuth(request(app).patch(path)),
+    delete: (path) => withAuth(request(app).delete(path)),
+    options: (path) => request(app).options(path),
+  };
+}
+
+async function registerViaApi(email, password = 'password123') {
+  const response = await request(app)
+    .post('/api/auth/register')
+    .set('Origin', allowedOrigin)
+    .send({ email, password })
+    .expect(201);
+  const cookie = response.headers['set-cookie'][0].split(';')[0];
+
+  return {
+    cookie,
+    csrfToken: response.body.data.csrf_token,
+    user: response.body.data.user,
+  };
+}
 
 function dateOffset(days) {
   const date = new Date();
@@ -26,7 +86,7 @@ function dateOffset(days) {
 }
 
 async function createTask(payload) {
-  const response = await request(app)
+  const response = await client
     .post('/api/tasks')
     .send({ priority: 'Medium', ...payload })
     .expect(201);
@@ -35,7 +95,7 @@ async function createTask(payload) {
 }
 
 async function getCategories() {
-  const response = await request(app).get('/api/categories').expect(200);
+  const response = await client.get('/api/categories').expect(200);
   return response.body.data;
 }
 
@@ -54,8 +114,8 @@ describe('categories', () => {
   });
 
   it('creates categories and orders them after defaults', async () => {
-    await request(app).post('/api/categories').send({ name: 'Hobi' }).expect(201);
-    await request(app).post('/api/categories').send({ name: 'Arsip' }).expect(201);
+    await client.post('/api/categories').send({ name: 'Hobi' }).expect(201);
+    await client.post('/api/categories').send({ name: 'Arsip' }).expect(201);
 
     const categories = await getCategories();
 
@@ -70,9 +130,9 @@ describe('categories', () => {
   });
 
   it('rejects duplicate names case-insensitively', async () => {
-    await request(app).post('/api/categories').send({ name: 'Hobi' }).expect(201);
+    await client.post('/api/categories').send({ name: 'Hobi' }).expect(201);
 
-    const response = await request(app)
+    const response = await client
       .post('/api/categories')
       .send({ name: 'hobi' })
       .expect(409);
@@ -87,7 +147,7 @@ describe('categories', () => {
     const categories = await getCategories();
     const pribadi = categories.find((category) => category.name === 'Pribadi');
 
-    const response = await request(app)
+    const response = await client
       .patch(`/api/categories/${pribadi.id}`)
       .send({ name: '  Personal  ' })
       .expect(200);
@@ -103,9 +163,9 @@ describe('categories', () => {
     const categories = await getCategories();
     const belajar = categories.find((category) => category.name === 'Belajar');
 
-    await request(app).delete(`/api/categories/${belajar.id}`).expect(200);
+    await client.delete(`/api/categories/${belajar.id}`).expect(200);
 
-    const response = await request(app)
+    const response = await client
       .post('/api/categories')
       .send({ name: 'Belajar' })
       .expect(201);
@@ -114,7 +174,7 @@ describe('categories', () => {
   });
 
   it('sets task category to null when its category is deleted', async () => {
-    const categoryResponse = await request(app)
+    const categoryResponse = await client
       .post('/api/categories')
       .send({ name: 'Sementara' })
       .expect(201);
@@ -124,11 +184,11 @@ describe('categories', () => {
       category_id: categoryResponse.body.data.id,
     });
 
-    await request(app)
+    await client
       .delete(`/api/categories/${categoryResponse.body.data.id}`)
       .expect(200);
 
-    const response = await request(app).get('/api/tasks').expect(200);
+    const response = await client.get('/api/tasks').expect(200);
     const updated = response.body.data.find((item) => item.id === task.id);
 
     expect(updated).toMatchObject({
@@ -138,10 +198,10 @@ describe('categories', () => {
   });
 
   it('returns 404 for unknown categories and validates names', async () => {
-    await request(app).patch('/api/categories/9999').send({ name: 'X' }).expect(404);
-    await request(app).delete('/api/categories/9999').expect(404);
+    await client.patch('/api/categories/9999').send({ name: 'X' }).expect(404);
+    await client.delete('/api/categories/9999').expect(404);
 
-    const response = await request(app)
+    const response = await client
       .post('/api/categories')
       .send({ name: '   ' })
       .expect(400);
@@ -152,7 +212,7 @@ describe('categories', () => {
 
 describe('tasks', () => {
   it('creates a task with defaults and trims fields', async () => {
-    const response = await request(app)
+    const response = await client
       .post('/api/tasks')
       .send({ title: '  Beli susu  ', priority: 'High' })
       .expect(201);
@@ -170,7 +230,7 @@ describe('tasks', () => {
   });
 
   it('validates task input', async () => {
-    const blankTitle = await request(app)
+    const blankTitle = await client
       .post('/api/tasks')
       .send({ title: '   ', priority: 'Medium' })
       .expect(400);
@@ -180,7 +240,7 @@ describe('tasks', () => {
       errors: { title: 'Judul tugas harus 1-120 karakter.' },
     });
 
-    const missingPriority = await request(app)
+    const missingPriority = await client
       .post('/api/tasks')
       .send({ title: 'Tanpa prioritas' })
       .expect(400);
@@ -189,21 +249,21 @@ describe('tasks', () => {
       'Prioritas tugas tidak valid.',
     );
 
-    const badStatus = await request(app)
+    const badStatus = await client
       .post('/api/tasks')
       .send({ title: 'Status salah', priority: 'Low', status: 'Selesai' })
       .expect(400);
 
     expect(badStatus.body.errors.status).toBe('Status tugas tidak valid.');
 
-    const badDeadline = await request(app)
+    const badDeadline = await client
       .post('/api/tasks')
       .send({ title: 'Tanggal salah', priority: 'Low', deadline: '2026-02-30' })
       .expect(400);
 
     expect(badDeadline.body.errors.deadline).toBe('Tanggal tenggat tidak valid.');
 
-    const badCategory = await request(app)
+    const badCategory = await client
       .post('/api/tasks')
       .send({ title: 'Kategori salah', priority: 'Low', category_id: 9999 })
       .expect(400);
@@ -220,26 +280,26 @@ describe('tasks', () => {
 
     expect(task.overdue).toBe(true);
 
-    const done = await request(app)
+    const done = await client
       .patch(`/api/tasks/${task.id}`)
       .send({ status: 'Done' })
       .expect(200);
 
     expect(done.body.data.overdue).toBe(false);
 
-    const reopened = await request(app)
+    const reopened = await client
       .patch(`/api/tasks/${task.id}`)
       .send({ status: 'Todo' })
       .expect(200);
 
     expect(reopened.body.data.overdue).toBe(true);
 
-    await request(app)
+    await client
       .patch(`/api/tasks/${task.id}`)
       .send({ status: 'Done' })
       .expect(200);
 
-    const inProgress = await request(app)
+    const inProgress = await client
       .patch(`/api/tasks/${task.id}`)
       .send({ status: 'In Progress' })
       .expect(200);
@@ -247,7 +307,7 @@ describe('tasks', () => {
     expect(inProgress.body.data.status).toBe('In Progress');
     expect(inProgress.body.data.overdue).toBe(true);
 
-    const updated = await request(app)
+    const updated = await client
       .patch(`/api/tasks/${task.id}`)
       .send({
         title: '  Judul baru  ',
@@ -269,9 +329,9 @@ describe('tasks', () => {
   it('deletes a task and returns 404 afterwards', async () => {
     const task = await createTask({ title: 'Akan dihapus' });
 
-    await request(app).delete(`/api/tasks/${task.id}`).expect(200);
-    await request(app).patch(`/api/tasks/${task.id}`).send({ title: 'X' }).expect(404);
-    await request(app).delete(`/api/tasks/${task.id}`).expect(404);
+    await client.delete(`/api/tasks/${task.id}`).expect(200);
+    await client.patch(`/api/tasks/${task.id}`).send({ title: 'X' }).expect(404);
+    await client.delete(`/api/tasks/${task.id}`).expect(404);
   });
 
   it('searches title and description case-insensitively and escapes wildcards', async () => {
@@ -279,21 +339,21 @@ describe('tasks', () => {
     await createTask({ title: 'Diskon 100%', priority: 'Low' });
     await createTask({ title: 'Biasa', priority: 'Low' });
 
-    const byTitle = await request(app)
+    const byTitle = await client
       .get('/api/tasks')
       .query({ search: 'ALPHA' })
       .expect(200);
 
     expect(byTitle.body.data.map((task) => task.title)).toEqual(['Alpha']);
 
-    const byDescription = await request(app)
+    const byDescription = await client
       .get('/api/tasks')
       .query({ search: 'gamma' })
       .expect(200);
 
     expect(byDescription.body.data.map((task) => task.title)).toEqual(['Alpha']);
 
-    const wildcard = await request(app)
+    const wildcard = await client
       .get('/api/tasks')
       .query({ search: '%' })
       .expect(200);
@@ -304,7 +364,7 @@ describe('tasks', () => {
   it('filters by category, status, and priority with AND semantics', async () => {
     const categories = await getCategories();
     const pribadi = categories.find((category) => category.name === 'Pribadi');
-    const customResponse = await request(app)
+    const customResponse = await client
       .post('/api/categories')
       .send({ name: 'Proyek' })
       .expect(201);
@@ -328,14 +388,14 @@ describe('tasks', () => {
       priority: 'High',
     });
 
-    const none = await request(app)
+    const none = await client
       .get('/api/tasks')
       .query({ category_id: 'none' })
       .expect(200);
 
     expect(none.body.data.map((task) => task.title)).toEqual(['Tanpa kategori']);
 
-    const combined = await request(app)
+    const combined = await client
       .get('/api/tasks')
       .query({ status: 'Todo', priority: 'High' })
       .expect(200);
@@ -345,7 +405,7 @@ describe('tasks', () => {
       'Tanpa kategori',
     ]);
 
-    const byCategory = await request(app)
+    const byCategory = await client
       .get('/api/tasks')
       .query({ category_id: String(proyek.id), status: 'Done' })
       .expect(200);
@@ -368,14 +428,14 @@ describe('tasks', () => {
     });
     const third = await createTask({ title: 'Tanpa deadline', priority: 'Low' });
 
-    const newest = await request(app).get('/api/tasks').expect(200);
+    const newest = await client.get('/api/tasks').expect(200);
     expect(newest.body.data.map((task) => task.id)).toEqual([
       third.id,
       second.id,
       first.id,
     ]);
 
-    const byDeadline = await request(app)
+    const byDeadline = await client
       .get('/api/tasks')
       .query({ sort: 'deadline_asc' })
       .expect(200);
@@ -388,10 +448,10 @@ describe('tasks', () => {
   });
 
   it('rejects invalid filters and sorting', async () => {
-    await request(app).get('/api/tasks').query({ status: 'Selesai' }).expect(400);
-    await request(app).get('/api/tasks').query({ priority: 'Tinggi' }).expect(400);
-    await request(app).get('/api/tasks').query({ sort: 'acak' }).expect(400);
-    await request(app)
+    await client.get('/api/tasks').query({ status: 'Selesai' }).expect(400);
+    await client.get('/api/tasks').query({ priority: 'Tinggi' }).expect(400);
+    await client.get('/api/tasks').query({ sort: 'acak' }).expect(400);
+    await client
       .get('/api/tasks')
       .query({ category_id: 'abc' })
       .expect(400);
@@ -404,7 +464,7 @@ describe('dashboard', () => {
     await createTask({ title: 'Dua', status: 'Done', priority: 'High' });
     await createTask({ title: 'Tiga', status: 'In Progress', priority: 'Low' });
 
-    const response = await request(app)
+    const response = await client
       .get('/api/dashboard/stats')
       .expect(200);
 
@@ -414,9 +474,9 @@ describe('dashboard', () => {
       byPriority: { Low: 1, Medium: 0, High: 2, Urgent: 0 },
     });
 
-    await request(app).get('/api/tasks').query({ status: 'Todo' }).expect(200);
+    await client.get('/api/tasks').query({ status: 'Todo' }).expect(200);
 
-    const unchanged = await request(app)
+    const unchanged = await client
       .get('/api/dashboard/stats')
       .expect(200);
 
@@ -424,9 +484,177 @@ describe('dashboard', () => {
   });
 });
 
+describe('health check', () => {
+  it('returns 200 only when the runtime database responds without changing data', async () => {
+    const before = await pool.query(
+      `SELECT (SELECT count(*) FROM categories)::int AS categories,
+              (SELECT count(*) FROM tasks)::int AS tasks`,
+    );
+
+    const response = await client.get('/api/health').expect(200);
+
+    expect(response.body).toEqual({ status: 'ok' });
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.text).not.toMatch(/postgres|neon|database_url|localhost/i);
+
+    const after = await pool.query(
+      `SELECT (SELECT count(*) FROM categories)::int AS categories,
+              (SELECT count(*) FROM tasks)::int AS tasks`,
+    );
+
+    expect(after.rows[0]).toEqual(before.rows[0]);
+  });
+
+  it('returns 503 without leaking database details when the dependency fails', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const failingApp = createApp(
+      {
+        execute: async () => {
+          throw new Error(
+            'kredensial-rahasia db.example.com production gagal',
+          );
+        },
+      },
+      { healthCheckTimeoutMs: 100 },
+    );
+
+    try {
+      const response = await request(failingApp)
+        .get('/api/health')
+        .expect(503);
+
+      expect(response.body).toEqual({ status: 'unhealthy' });
+      expect(response.headers['cache-control']).toBe('no-store');
+      expect(response.text).not.toMatch(
+        /kredensial|db\.example|production|stack|Error/i,
+      );
+      expect(errorSpy).toHaveBeenCalledWith('Health check database gagal.');
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('returns 503 when the database query times out', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const hangingApp = createApp(
+      { execute: () => new Promise(() => {}) },
+      { healthCheckTimeoutMs: 50 },
+    );
+
+    try {
+      const response = await request(hangingApp)
+        .get('/api/health')
+        .expect(503);
+
+      expect(response.body).toEqual({ status: 'unhealthy' });
+      expect(response.headers['cache-control']).toBe('no-store');
+      expect(response.text).not.toMatch(
+        /kredensial|db\.example|production|stack|Error/i,
+      );
+      expect(errorSpy).toHaveBeenCalledWith('Health check database gagal.');
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+});
+
+describe('CORS', () => {
+  it('allows preflight from an allowed origin with credentials', async () => {
+    const response = await client
+      .options('/api/tasks')
+      .set('Origin', allowedOrigin)
+      .set('Access-Control-Request-Method', 'GET')
+      .set('Access-Control-Request-Headers', 'X-CSRF-Token')
+      .expect(204);
+
+    expect(response.headers['access-control-allow-origin']).toBe(allowedOrigin);
+    expect(response.headers['access-control-allow-credentials']).toBe('true');
+    expect(response.headers['access-control-allow-headers']).toContain(
+      'X-CSRF-Token',
+    );
+  });
+
+  it('does not grant CORS access to an unknown origin', async () => {
+    const response = await client
+      .options('/api/tasks')
+      .set('Origin', 'https://contoh-tidak-diizinkan.example')
+      .set('Access-Control-Request-Method', 'GET');
+
+    expect(response.status).toBe(404);
+    expect(response.headers['access-control-allow-origin']).toBeUndefined();
+    expect(response.headers['access-control-allow-credentials']).toBeUndefined();
+  });
+});
+
+describe('API contract', () => {
+  it('preserves integer IDs, booleans, timestamps, and date-only deadlines', async () => {
+    const categories = await getCategories();
+
+    for (const category of categories) {
+      expect(Number.isInteger(category.id)).toBe(true);
+      expect(typeof category.is_default).toBe('boolean');
+      expect(category.created_at).toMatch(
+        /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,
+      );
+    }
+
+    const task = await createTask({
+      title: 'Kontrak API',
+      priority: 'High',
+      deadline: '2030-05-06',
+    });
+
+    expect(Number.isInteger(task.id)).toBe(true);
+    expect(task.deadline).toBe('2030-05-06');
+    expect(typeof task.overdue).toBe('boolean');
+    expect(task.created_at).toMatch(
+      /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,
+    );
+  });
+
+  it('keeps error statuses and the standard error envelope', async () => {
+    const validation = await client
+      .post('/api/tasks')
+      .send({ title: '   ', priority: 'High' })
+      .expect(400);
+
+    expect(validation.body).toMatchObject({
+      success: false,
+      errors: { title: 'Judul tugas harus 1-120 karakter.' },
+    });
+
+    const notFound = await client
+      .patch('/api/tasks/9999')
+      .send({ title: 'Tidak ada' })
+      .expect(404);
+
+    expect(notFound.body).toMatchObject({ success: false });
+
+    await client.post('/api/categories').send({ name: 'Hobi' }).expect(201);
+
+    const conflict = await client
+      .post('/api/categories')
+      .send({ name: 'hobi' })
+      .expect(409);
+
+    expect(conflict.body).toMatchObject({
+      success: false,
+      errors: { name: 'Nama kategori sudah digunakan.' },
+    });
+
+    const unknown = await client.get('/api/tidak-ada').expect(404);
+
+    expect(unknown.body).toEqual({
+      success: false,
+      message: 'Endpoint tidak ditemukan.',
+      errors: {},
+    });
+  });
+});
+
 describe('errors', () => {
   it('returns the standard error envelope', async () => {
-    const response = await request(app).get('/api/tidak-ada').expect(404);
+    const response = await client.get('/api/tidak-ada').expect(404);
 
     expect(response.body).toEqual({
       success: false,
@@ -436,7 +664,7 @@ describe('errors', () => {
   });
 
   it('returns 400 for malformed JSON', async () => {
-    const response = await request(app)
+    const response = await client
       .post('/api/tasks')
       .set('Content-Type', 'application/json')
       .send('{"title":')

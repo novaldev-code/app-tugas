@@ -1,17 +1,52 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { sql } from 'drizzle-orm';
+import cors from 'cors';
 import express from 'express';
 import {
+  serializeClearedSessionCookie,
+  serializeSessionCookie,
+} from './auth/cookies.js';
+import { matchesCsrfToken } from './auth/csrf.js';
+import { createRateLimiter } from './auth/rate-limit.js';
+import { createAuthMiddleware } from './auth/middleware.js';
+import {
   ConflictError,
+  ForbiddenError,
   HttpError,
   NotFoundError,
+  RateLimitError,
   ValidationError,
 } from './errors.js';
 import {
+  createCategory,
+  deleteCategory,
+  getCategoryById,
+  listCategories,
+  renameCategory,
+} from './repositories/categories.js';
+import {
+  mapCategoryRecord,
+  mapTaskRecord,
+} from './repositories/mappers.js';
+import { getTaskStats } from './repositories/stats.js';
+import {
+  createTask,
+  deleteTask,
+  getTaskById,
+  listTasks,
+  updateTask,
+} from './repositories/tasks.js';
+import { mapUser } from './repositories/users.js';
+import {
+  loginUser,
+  logoutUser,
+  registerUser,
+} from './services/auth.js';
+import {
   PRIORITIES,
   STATUSES,
-  isOverdue,
   normalizeCategoryId,
   normalizeCategoryName,
   normalizeDeadline,
@@ -23,37 +58,6 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const TASK_SELECT = `
-  SELECT t.*, c.name AS category_name
-  FROM tasks t
-  LEFT JOIN categories c ON c.id = t.category_id
-`;
-
-function mapTask(row) {
-  return {
-    id: row.id,
-    title: row.title,
-    description: row.description,
-    status: row.status,
-    priority: row.priority,
-    deadline: row.deadline,
-    category_id: row.category_id,
-    category_name: row.category_name ?? null,
-    created_at: row.created_at,
-    overdue: isOverdue(row.deadline, row.status),
-  };
-}
-
-function mapCategory(row) {
-  return {
-    id: row.id,
-    name: row.name,
-    is_default: Boolean(row.is_default),
-    sort_order: row.sort_order,
-    created_at: row.created_at,
-  };
-}
-
 function parseId(value, entity) {
   const id = Number(value);
 
@@ -64,110 +68,268 @@ function parseId(value, entity) {
   return id;
 }
 
-function getTaskRow(db, id) {
-  const row = db.prepare(`${TASK_SELECT} WHERE t.id = ?`).get(id);
-
-  if (!row) {
-    throw new NotFoundError('Tugas tidak ditemukan.');
-  }
-
-  return row;
-}
-
-function getTask(db, id) {
-  return mapTask(getTaskRow(db, id));
-}
-
-function getCategoryRow(db, id) {
-  const row = db.prepare('SELECT * FROM categories WHERE id = ?').get(id);
-
-  if (!row) {
-    throw new NotFoundError('Kategori tidak ditemukan.');
-  }
-
-  return row;
-}
-
-function getCategory(db, id) {
-  return mapCategory(getCategoryRow(db, id));
-}
-
-function ensureCategory(db, id) {
+async function ensureCategoryExists(db, userId, id) {
   if (id === null) {
     return;
   }
 
-  const row = db.prepare('SELECT id FROM categories WHERE id = ?').get(id);
+  const category = await getCategoryById(db, userId, id);
 
-  if (!row) {
+  if (!category) {
     throw new ValidationError('Kategori tidak ditemukan.', {
       category_id: 'Kategori tidak ditemukan.',
     });
   }
 }
 
-function escapeLike(value) {
-  return value.replace(/[\\%_]/g, '\\$&');
+function withTimeout(promise, timeoutMs) {
+  let timeoutId;
+
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timeoutId = setTimeout(
+        () => reject(new Error('Health check timeout')),
+        timeoutMs,
+      );
+    }),
+  ]).finally(() => clearTimeout(timeoutId));
 }
 
-const categoryCollator = new Intl.Collator('id', { sensitivity: 'base' });
+function translateDatabaseError(error) {
+  if (!error || typeof error !== 'object') {
+    return null;
+  }
 
-function sortCategories(rows) {
-  return [...rows].sort((left, right) => {
-    if (left.is_default !== right.is_default) {
-      return right.is_default - left.is_default;
-    }
+  if (error.code === '23505') {
+    return new ConflictError('Nama kategori sudah digunakan.', {
+      name: 'Nama kategori sudah digunakan.',
+    });
+  }
 
-    if (left.is_default) {
-      const bySortOrder = left.sort_order - right.sort_order;
+  if (
+    error.code === '23503' ||
+    error.code === '23514' ||
+    error.code === '22P02' ||
+    error.code === '22007' ||
+    error.code === '22008' ||
+    error.code === '22001'
+  ) {
+    return new ValidationError('Data tidak valid.', {});
+  }
 
-      if (bySortOrder !== 0) {
-        return bySortOrder;
-      }
-    }
-
-    const byName = categoryCollator.compare(left.name, right.name);
-
-    if (byName !== 0) {
-      return byName;
-    }
-
-    return left.id - right.id;
-  });
+  return null;
 }
 
-export function createApp(db) {
+function rateLimitKey(req, email) {
+  const address = req.ip || req.socket?.remoteAddress || 'unknown';
+  return `${address}:${String(email ?? '').trim().toLowerCase()}`;
+}
+
+function sessionResponse(user, session) {
+  return {
+    user: mapUser(user),
+    csrf_token: session.csrfToken,
+    expires_at: session.expiresAt.toISOString(),
+  };
+}
+
+export function createApp(
+  db,
+  {
+    corsOrigins = [],
+    healthCheckTimeoutMs = 2000,
+    auth = {},
+  } = {},
+) {
   const app = express();
+  const allowedOrigins = corsOrigins.filter((origin) => origin !== '*');
+  const allowedOriginSet = new Set(allowedOrigins);
+  const {
+    cookieName = 'ptm_session',
+    cookieSecure = false,
+    cookieSameSite = 'Lax',
+    sessionTtlHours = 168,
+    rateLimitOptions = {},
+  } = auth;
+  const authMiddleware = createAuthMiddleware({
+    db,
+    cookieName,
+    allowedOrigins,
+  });
+  const authRateLimiter = createRateLimiter(rateLimitOptions);
+
+  function setSessionCookie(res, session) {
+    res.append(
+      'Set-Cookie',
+      serializeSessionCookie({
+        name: cookieName,
+        value: session.token,
+        maxAge: sessionTtlHours * 60 * 60,
+        secure: cookieSecure,
+        sameSite: cookieSameSite,
+      }),
+    );
+  }
+
+  function clearSessionCookie(res) {
+    res.append(
+      'Set-Cookie',
+      serializeClearedSessionCookie({
+        name: cookieName,
+        secure: cookieSecure,
+        sameSite: cookieSameSite,
+      }),
+    );
+  }
+
+  app.use(
+    cors({
+      origin(origin, callback) {
+        if (!origin || allowedOriginSet.has(origin)) {
+          return callback(null, true);
+        }
+
+        return callback(null, false);
+      },
+      credentials: true,
+      methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'X-CSRF-Token'],
+      optionsSuccessStatus: 204,
+    }),
+  );
 
   app.use(express.json({ limit: '1mb' }));
 
-  app.get('/api/tasks', (req, res) => {
-    const where = [];
-    const params = [];
+  app.get('/api/health', async (_req, res) => {
+    res.set('Cache-Control', 'no-store');
 
-    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
-
-    if (search) {
-      const pattern = `%${escapeLike(search)}%`;
-      where.push(
-        `(t.title LIKE ? ESCAPE '\\' OR IFNULL(t.description, '') LIKE ? ESCAPE '\\')`,
-      );
-      params.push(pattern, pattern);
+    try {
+      await withTimeout(db.execute(sql`SELECT 1`), healthCheckTimeoutMs);
+      return res.status(200).json({ status: 'ok' });
+    } catch {
+      console.error('Health check database gagal.');
+      return res.status(503).json({ status: 'unhealthy' });
     }
+  });
+
+  app.post(
+    '/api/auth/register',
+    authMiddleware.requireTrustedOrigin,
+    authMiddleware.requireJsonContentType,
+    async (req, res) => {
+      const body = req.body ?? {};
+      const rate = authRateLimiter.check(rateLimitKey(req, body.email));
+
+      if (!rate.allowed) {
+        throw new RateLimitError(
+          'Terlalu banyak percobaan. Coba lagi nanti.',
+          Math.ceil(rate.retryAfterMs / 1000),
+        );
+      }
+
+      const result = await registerUser(db, body, { sessionTtlHours });
+      setSessionCookie(res, result.session);
+
+      res.status(201).json({
+        success: true,
+        data: sessionResponse(result.user, result.session),
+      });
+    },
+  );
+
+  app.post(
+    '/api/auth/login',
+    authMiddleware.requireTrustedOrigin,
+    authMiddleware.requireJsonContentType,
+    async (req, res) => {
+      const body = req.body ?? {};
+      const rate = authRateLimiter.check(rateLimitKey(req, body.email));
+
+      if (!rate.allowed) {
+        throw new RateLimitError(
+          'Terlalu banyak percobaan. Coba lagi nanti.',
+          Math.ceil(rate.retryAfterMs / 1000),
+        );
+      }
+
+      const result = await loginUser(db, body, { sessionTtlHours });
+      setSessionCookie(res, result.session);
+
+      res.json({
+        success: true,
+        data: sessionResponse(result.user, result.session),
+      });
+    },
+  );
+
+  app.post(
+    '/api/auth/logout',
+    authMiddleware.requireTrustedOrigin,
+    async (req, res) => {
+      const authResult = await authMiddleware.loadSession(req);
+
+      if (authResult) {
+        const provided = req.get('X-CSRF-Token');
+
+        if (!matchesCsrfToken(authResult.session.csrfToken, provided)) {
+          throw new ForbiddenError('Token CSRF tidak valid.');
+        }
+
+        await logoutUser(db, authResult.session);
+      }
+
+      clearSessionCookie(res);
+      res.json({ success: true, data: {} });
+    },
+  );
+
+  app.get('/api/auth/me', authMiddleware.requireAuth, (req, res) => {
+    res.json({
+      success: true,
+      data: sessionResponse(req.auth.user, req.auth.session),
+    });
+  });
+
+  app.use('/api', (req, res, next) => {
+    if (req.method === 'OPTIONS') {
+      return next();
+    }
+
+    return authMiddleware.requireAuth(req, res, next);
+  });
+
+  app.use('/api', (req, res, next) => {
+    if (!['POST', 'PATCH', 'DELETE'].includes(req.method)) {
+      return next();
+    }
+
+    return authMiddleware.requireTrustedOrigin(req, res, () => {
+      authMiddleware.requireCsrf(req, res, next);
+    });
+  });
+
+  app.get('/api/tasks', async (req, res) => {
+    const userId = req.auth.user.id;
+    const search =
+      typeof req.query.search === 'string' ? req.query.search.trim() : '';
 
     const categoryFilter =
-      typeof req.query.category_id === 'string' ? req.query.category_id.trim() : '';
+      typeof req.query.category_id === 'string'
+        ? req.query.category_id.trim()
+        : '';
+    let categoryId;
 
     if (categoryFilter && categoryFilter !== 'all') {
-      if (categoryFilter === 'none' || categoryFilter === 'null') {
-        where.push('t.category_id IS NULL');
-      } else {
-        where.push('t.category_id = ?');
-        params.push(normalizeCategoryId(categoryFilter));
-      }
+      categoryId =
+        categoryFilter === 'none' || categoryFilter === 'null'
+          ? null
+          : normalizeCategoryId(categoryFilter);
     }
 
-    const statusFilter = typeof req.query.status === 'string' ? req.query.status : '';
+    const statusFilter =
+      typeof req.query.status === 'string' ? req.query.status : '';
+    let status;
 
     if (statusFilter && statusFilter !== 'all') {
       if (!STATUSES.includes(statusFilter)) {
@@ -176,12 +338,12 @@ export function createApp(db) {
         });
       }
 
-      where.push('t.status = ?');
-      params.push(statusFilter);
+      status = statusFilter;
     }
 
     const priorityFilter =
       typeof req.query.priority === 'string' ? req.query.priority : '';
+    let priority;
 
     if (priorityFilter && priorityFilter !== 'all') {
       if (!PRIORITIES.includes(priorityFilter)) {
@@ -190,34 +352,31 @@ export function createApp(db) {
         });
       }
 
-      where.push('t.priority = ?');
-      params.push(priorityFilter);
+      priority = priorityFilter;
     }
 
-    const sort = typeof req.query.sort === 'string' ? req.query.sort : 'created_desc';
-    let orderBy;
+    const sort =
+      typeof req.query.sort === 'string' ? req.query.sort : 'created_desc';
 
-    if (sort === 'deadline_asc') {
-      orderBy =
-        'ORDER BY (t.deadline IS NULL) ASC, t.deadline ASC, t.created_at DESC, t.id DESC';
-    } else if (sort === 'created_desc' || sort === '') {
-      orderBy = 'ORDER BY t.created_at DESC, t.id DESC';
-    } else {
+    if (sort !== 'deadline_asc' && sort !== 'created_desc' && sort !== '') {
       throw new ValidationError('Urutan tidak valid.', {
         sort: 'Urutan tidak valid.',
       });
     }
 
-    const sql = `${TASK_SELECT}${
-      where.length > 0 ? ` WHERE ${where.join(' AND ')}` : ''
-    } ${orderBy}`;
+    const rows = await listTasks(db, userId, {
+      search,
+      categoryId,
+      status,
+      priority,
+      sort,
+    });
 
-    const rows = db.prepare(sql).all(...params);
-
-    res.json({ success: true, data: rows.map(mapTask) });
+    res.json({ success: true, data: rows.map(mapTaskRecord) });
   });
 
-  app.post('/api/tasks', (req, res) => {
+  app.post('/api/tasks', async (req, res) => {
+    const userId = req.auth.user.id;
     const body = req.body ?? {};
     const title = normalizeTitle(body.title);
     const description = normalizeDescription(body.description);
@@ -226,170 +385,130 @@ export function createApp(db) {
     const deadline = normalizeDeadline(body.deadline);
     const categoryId = normalizeCategoryId(body.category_id);
 
-    ensureCategory(db, categoryId);
+    await ensureCategoryExists(db, userId, categoryId);
 
-    const info = db
-      .prepare(
-        `INSERT INTO tasks (title, description, status, priority, deadline, category_id)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-      .run(title, description, status, priority, deadline, categoryId);
+    const created = await createTask(db, userId, {
+      title,
+      description,
+      status,
+      priority,
+      deadline,
+      categoryId,
+    });
 
     res.status(201).json({
       success: true,
-      data: getTask(db, info.lastInsertRowid),
+      data: mapTaskRecord(created),
     });
   });
 
-  app.patch('/api/tasks/:id', (req, res) => {
+  app.patch('/api/tasks/:id', async (req, res) => {
+    const userId = req.auth.user.id;
     const id = parseId(req.params.id, 'Tugas');
-    getTaskRow(db, id);
+    const existing = await getTaskById(db, userId, id);
+
+    if (!existing) {
+      throw new NotFoundError('Tugas tidak ditemukan.');
+    }
 
     const body = req.body ?? {};
-    const fields = [];
-    const values = [];
+    const updates = {};
 
     if (Object.hasOwn(body, 'title')) {
-      fields.push('title = ?');
-      values.push(normalizeTitle(body.title));
+      updates.title = normalizeTitle(body.title);
     }
 
     if (Object.hasOwn(body, 'description')) {
-      fields.push('description = ?');
-      values.push(normalizeDescription(body.description));
+      updates.description = normalizeDescription(body.description);
     }
 
     if (Object.hasOwn(body, 'status')) {
-      fields.push('status = ?');
-      values.push(normalizeStatus(body.status));
+      updates.status = normalizeStatus(body.status);
     }
 
     if (Object.hasOwn(body, 'priority')) {
-      fields.push('priority = ?');
-      values.push(normalizePriority(body.priority));
+      updates.priority = normalizePriority(body.priority);
     }
 
     if (Object.hasOwn(body, 'deadline')) {
-      fields.push('deadline = ?');
-      values.push(normalizeDeadline(body.deadline));
+      updates.deadline = normalizeDeadline(body.deadline);
     }
 
     if (Object.hasOwn(body, 'category_id')) {
       const categoryId = normalizeCategoryId(body.category_id);
-      ensureCategory(db, categoryId);
-      fields.push('category_id = ?');
-      values.push(categoryId);
+      await ensureCategoryExists(db, userId, categoryId);
+      updates.categoryId = categoryId;
     }
 
-    if (fields.length > 0) {
-      db.prepare(`UPDATE tasks SET ${fields.join(', ')} WHERE id = ?`).run(
-        ...values,
-        id,
-      );
-    }
+    const updated = await updateTask(db, userId, id, updates);
 
-    res.json({ success: true, data: getTask(db, id) });
+    res.json({ success: true, data: mapTaskRecord(updated) });
   });
 
-  app.delete('/api/tasks/:id', (req, res) => {
+  app.delete('/api/tasks/:id', async (req, res) => {
+    const userId = req.auth.user.id;
     const id = parseId(req.params.id, 'Tugas');
-    getTaskRow(db, id);
-    db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
+    const existing = await getTaskById(db, userId, id);
+
+    if (!existing) {
+      throw new NotFoundError('Tugas tidak ditemukan.');
+    }
+
+    await deleteTask(db, userId, id);
 
     res.json({ success: true, data: { id } });
   });
 
-  app.get('/api/categories', (_req, res) => {
-    const rows = db.prepare('SELECT * FROM categories').all();
-    res.json({ success: true, data: sortCategories(rows).map(mapCategory) });
+  app.get('/api/categories', async (req, res) => {
+    const rows = await listCategories(db, req.auth.user.id);
+    res.json({ success: true, data: rows.map(mapCategoryRecord) });
   });
 
-  app.post('/api/categories', (req, res) => {
+  app.post('/api/categories', async (req, res) => {
+    const userId = req.auth.user.id;
     const body = req.body ?? {};
     const name = normalizeCategoryName(body.name);
-
-    const existing = db
-      .prepare('SELECT id FROM categories WHERE name = ? COLLATE NOCASE')
-      .get(name);
-
-    if (existing) {
-      throw new ConflictError('Nama kategori sudah digunakan.', {
-        name: 'Nama kategori sudah digunakan.',
-      });
-    }
-
-    const maxSort = db
-      .prepare('SELECT COALESCE(MAX(sort_order), 0) AS max FROM categories')
-      .get().max;
-
-    const info = db
-      .prepare(
-        'INSERT INTO categories (name, is_default, sort_order) VALUES (?, 0, ?)',
-      )
-      .run(name, maxSort + 1);
+    const created = await createCategory(db, userId, { name });
 
     res.status(201).json({
       success: true,
-      data: getCategory(db, info.lastInsertRowid),
+      data: mapCategoryRecord(created),
     });
   });
 
-  app.patch('/api/categories/:id', (req, res) => {
+  app.patch('/api/categories/:id', async (req, res) => {
+    const userId = req.auth.user.id;
     const id = parseId(req.params.id, 'Kategori');
-    getCategoryRow(db, id);
+    const existing = await getCategoryById(db, userId, id);
+
+    if (!existing) {
+      throw new NotFoundError('Kategori tidak ditemukan.');
+    }
 
     const body = req.body ?? {};
     const name = normalizeCategoryName(body.name);
+    const updated = await renameCategory(db, userId, id, { name });
 
-    const existing = db
-      .prepare(
-        'SELECT id FROM categories WHERE name = ? COLLATE NOCASE AND id <> ?',
-      )
-      .get(name, id);
-
-    if (existing) {
-      throw new ConflictError('Nama kategori sudah digunakan.', {
-        name: 'Nama kategori sudah digunakan.',
-      });
-    }
-
-    db.prepare('UPDATE categories SET name = ? WHERE id = ?').run(name, id);
-
-    res.json({ success: true, data: getCategory(db, id) });
+    res.json({ success: true, data: mapCategoryRecord(updated) });
   });
 
-  app.delete('/api/categories/:id', (req, res) => {
+  app.delete('/api/categories/:id', async (req, res) => {
+    const userId = req.auth.user.id;
     const id = parseId(req.params.id, 'Kategori');
-    getCategoryRow(db, id);
-    db.prepare('DELETE FROM categories WHERE id = ?').run(id);
+    const existing = await getCategoryById(db, userId, id);
+
+    if (!existing) {
+      throw new NotFoundError('Kategori tidak ditemukan.');
+    }
+
+    await deleteCategory(db, userId, id);
 
     res.json({ success: true, data: { id } });
   });
 
-  app.get('/api/dashboard/stats', (_req, res) => {
-    const byStatus = Object.fromEntries(STATUSES.map((status) => [status, 0]));
-    const byPriority = Object.fromEntries(
-      PRIORITIES.map((priority) => [priority, 0]),
-    );
-
-    for (const row of db
-      .prepare('SELECT status, COUNT(*) AS count FROM tasks GROUP BY status')
-      .all()) {
-      byStatus[row.status] = row.count;
-    }
-
-    for (const row of db
-      .prepare('SELECT priority, COUNT(*) AS count FROM tasks GROUP BY priority')
-      .all()) {
-      byPriority[row.priority] = row.count;
-    }
-
-    const total = db.prepare('SELECT COUNT(*) AS count FROM tasks').get().count;
-
-    res.json({
-      success: true,
-      data: { total, byStatus, byPriority },
-    });
+  app.get('/api/dashboard/stats', async (req, res) => {
+    const stats = await getTaskStats(db, req.auth.user.id);
+    res.json({ success: true, data: stats });
   });
 
   app.use('/api', (_req, res) => {
@@ -423,15 +542,21 @@ export function createApp(db) {
       });
     }
 
-    if (err instanceof HttpError) {
-      return res.status(err.status).json({
+    if (err instanceof RateLimitError) {
+      res.set('Retry-After', String(err.retryAfterSeconds));
+    }
+
+    const httpError = err instanceof HttpError ? err : translateDatabaseError(err);
+
+    if (httpError) {
+      return res.status(httpError.status).json({
         success: false,
-        message: err.message,
-        errors: err.errors ?? {},
+        message: httpError.message,
+        errors: httpError.errors ?? {},
       });
     }
 
-    console.error(err);
+    console.error('Terjadi kesalahan internal pada server.');
 
     return res.status(500).json({
       success: false,

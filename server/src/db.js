@@ -1,21 +1,30 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import pg from 'pg';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-export function defaultDbPath() {
-  return process.env.DB_PATH || path.resolve(__dirname, '../data/tasks.db');
-}
-
-export function createDatabase(dbPath = defaultDbPath()) {
-  if (dbPath !== ':memory:') {
-    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+export function createPostgresPool({
+  connectionString,
+  max = 5,
+  connectionTimeoutMillis = 10000,
+  idleTimeoutMillis = 30000,
+} = {}) {
+  if (!connectionString) {
+    throw new Error('DATABASE_URL wajib diisi untuk koneksi PostgreSQL.');
   }
 
-  const db = new Database(dbPath);
-  db.pragma('foreign_keys = ON');
+  return new pg.Pool({
+    connectionString,
+    max,
+    connectionTimeoutMillis,
+    idleTimeoutMillis,
+  });
+}
 
-  return db;
+export function createPostgresDb(pool) {
+  return drizzle(pool);
+}
+
+export async function closePostgresPool(pool) {
+  if (pool && !pool.ended) {
+    await pool.end();
+  }
 }

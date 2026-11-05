@@ -1,8 +1,12 @@
-import { createDatabase, defaultDbPath } from './db.js';
+import 'dotenv/config';
 import { runMigrations } from './migrate.js';
 
-const db = createDatabase();
-runMigrations(db);
-db.close();
+const databaseUrl = process.env.DATABASE_URL_UNPOOLED?.trim();
 
-console.log(`Migrasi selesai: ${defaultDbPath()}`);
+if (!databaseUrl) {
+  throw new Error('DATABASE_URL_UNPOOLED wajib diisi untuk migration.');
+}
+
+await runMigrations({ databaseUrl });
+
+console.log('Migrasi selesai.');

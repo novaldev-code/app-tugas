@@ -10,10 +10,14 @@
     "dev": "concurrently -n server,client -c blue,green \"npm run dev -w server\" \"npm run dev -w client\"",
     "build": "npm run build -w client",
     "start": "npm run start -w server",
-    "migrate": "npm run migrate -w server",
+    "migrate": "npm run db:migrate -w server",
     "test": "npm run test -w server && npm run test -w client",
     "test:unit": "npm run test:unit -w server && npm run test -w client",
-    "test:integration": "npm run test:integration -w server"
+    "test:integration": "npm run test:integration -w server",
+    "db:generate": "npm run db:generate -w server --",
+    "db:migrate": "npm run db:migrate -w server",
+    "db:import": "npm run db:import -w server --",
+    "db:studio": "npm run db:studio -w server --"
   },
   "devDependencies": {
     "concurrently": "^10.0.6"

@@ -11,6 +11,10 @@ export default function AppShell({
   header,
   actions,
   children,
+  user,
+  onLogout,
+  logoutBusy,
+  logoutError,
 }) {
   const [collapsed, setCollapsed] = useState(() => getSidebarCollapsed());
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -59,6 +63,10 @@ export default function AppShell({
         collapsed={collapsed}
         onToggle={() => setCollapsed((current) => !current)}
         onNavigate={handleViewChange}
+        user={user}
+        onLogout={onLogout}
+        logoutBusy={logoutBusy}
+        logoutError={logoutError}
       />
 
       <header className="app-header">
@@ -80,7 +88,7 @@ export default function AppShell({
         <div className="header-group">{actions}</div>
       </header>
 
-      <main id="main-content" className="app-main">
+      <main id="main-content" className="app-main" tabIndex={-1}>
         {children}
       </main>
 
@@ -90,6 +98,10 @@ export default function AppShell({
         activeView={view}
         onClose={() => setDrawerOpen(false)}
         onNavigate={handleViewChange}
+        user={user}
+        onLogout={onLogout}
+        logoutBusy={logoutBusy}
+        logoutError={logoutError}
       />
     </div>
   );

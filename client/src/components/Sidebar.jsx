@@ -1,3 +1,4 @@
+import Brand from './Brand.jsx';
 import Icon from './Icon.jsx';
 
 export default function Sidebar({
@@ -6,28 +7,24 @@ export default function Sidebar({
   collapsed,
   onToggle,
   onNavigate,
+  user,
+  onLogout,
+  logoutBusy,
+  logoutError,
 }) {
   return (
     <aside className="sidebar" aria-label="Navigasi utama">
       <div className="sidebar-header">
-        <div className="brand">
-          <span className="brand-mark">MT</span>
-          {!collapsed && (
-            <div className="brand-text">
-              <span className="brand-title">Manajer Tugas</span>
-              <span className="brand-subtitle">Pribadi</span>
-            </div>
-          )}
-        </div>
+        <Brand collapsed={collapsed} />
         <button
           type="button"
           className="sidebar-toggle"
-          onClick={ontoggle}
+          onClick={onToggle}
           aria-label={collapsed ? 'Buka sidebar' : 'Tutup sidebar'}
           aria-expanded={!collapsed}
           aria-controls="sidebar-nav"
         >
-          <Icon name={collapsed ? 'chevron-right' : 'chevron-left'} />
+          <Icon name={collapsed ? 'chevronRight' : 'chevronLeft'} />
         </button>
       </div>
 
@@ -48,10 +45,40 @@ export default function Sidebar({
         ))}
       </nav>
 
-      {!collapsed && (
-        <div className="sidebar-footer"> 
-        </div>
-      )}
+      <div className="sidebar-footer">
+        {user &&
+          (collapsed ? (
+            <button
+              type="button"
+              className="button button-secondary button-small sidebar-logout-icon"
+              onClick={onLogout}
+              disabled={logoutBusy}
+              aria-label="Keluar"
+              title="Keluar"
+            >
+              Keluar
+            </button>
+          ) : (
+            <div className="sidebar-user">
+              <span className="sidebar-user-email" title={user.email}>
+                {user.email}
+              </span>
+              <button
+                type="button"
+                className="button button-secondary button-small sidebar-logout"
+                onClick={onLogout}
+                disabled={logoutBusy}
+              >
+                {logoutBusy ? 'Keluar...' : 'Keluar'}
+              </button>
+              {logoutError && (
+                <span className="sidebar-logout-error" role="alert">
+                  {logoutError}
+                </span>
+              )}
+            </div>
+          ))}
+      </div>
     </aside>
   );
 }

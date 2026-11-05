@@ -27,3 +27,28 @@ export class ConflictError extends HttpError {
     this.name = 'ConflictError';
   }
 }
+
+export class UnauthorizedError extends HttpError {
+  constructor(message = 'Sesi tidak valid.', errors = {}) {
+    super(401, message, errors);
+    this.name = 'UnauthorizedError';
+  }
+}
+
+export class ForbiddenError extends HttpError {
+  constructor(message = 'Permintaan ditolak.', errors = {}) {
+    super(403, message, errors);
+    this.name = 'ForbiddenError';
+  }
+}
+
+export class RateLimitError extends HttpError {
+  constructor(
+    message = 'Terlalu banyak percobaan. Coba lagi nanti.',
+    retryAfterSeconds = 60,
+  ) {
+    super(429, message);
+    this.name = 'RateLimitError';
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}

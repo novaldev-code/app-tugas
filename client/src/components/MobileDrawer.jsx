@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import Brand from './Brand.jsx';
 import Icon from './Icon.jsx';
 
 const FOCUSABLE_SELECTORS = [
@@ -13,6 +14,10 @@ export default function MobileDrawer({
   activeView,
   onClose,
   onNavigate,
+  user,
+  onLogout,
+  logoutBusy,
+  logoutError,
 }) {
   const drawerRef = useRef(null);
   const previouslyFocusedRef = useRef(null);
@@ -107,13 +112,7 @@ export default function MobileDrawer({
         tabIndex={-1}
       >
         <div className="sidebar-header">
-          <div className="brand">
-            <span className="brand-mark">MT</span>
-            <div className="brand-text">
-              <span className="brand-title">Manajer Tugas</span>
-              <span className="brand-subtitle">Pribadi</span>
-            </div>
-          </div>
+          <Brand />
           <button
             type="button"
             className="sidebar-toggle"
@@ -140,6 +139,29 @@ export default function MobileDrawer({
             </button>
           ))}
         </nav>
+
+        {user && (
+          <div className="sidebar-footer">
+            <div className="sidebar-user">
+              <span className="sidebar-user-email" title={user.email}>
+                {user.email}
+              </span>
+              <button
+                type="button"
+                className="button button-secondary button-small sidebar-logout"
+                onClick={onLogout}
+                disabled={logoutBusy}
+              >
+                {logoutBusy ? 'Keluar...' : 'Keluar'}
+              </button>
+              {logoutError && (
+                <span className="sidebar-logout-error" role="alert">
+                  {logoutError}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
       </aside>
     </>
   );
