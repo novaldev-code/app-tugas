@@ -1,232 +1,155 @@
-# Deployment Production
+# Deployment Production — Vercel Full-Stack
 
-Panduan ini disiapkan untuk arsitektur:
+Arsitektur production:
 
 - Frontend React + Vite → Vercel
-- Backend Express 5 → Render
-- Database Neon PostgreSQL
-- Repository GitHub (monorepo npm workspaces)
+- Backend Express 5 → Vercel Functions (`api/[...path].js`)
+- Database → Neon PostgreSQL
+- Repository → GitHub
+- Monorepo npm workspaces
 
-Tidak ada secret nyata di repository. Semua nilai rahasia diisi melalui dashboard provider.
+Frontend dan backend berada pada **satu project Vercel** dan satu origin:
 
-## 1. Topologi cookie yang direkomendasikan
+```text
+https://app-tugas.vercel.app
+```
 
-Gunakan salah satu topologi **first-party cookie** berikut.
+Semua request frontend ke `/api/*` ditangani Vercel Function pada origin yang sama.
 
-### Opsi A — domain same-site (direkomendasikan)
+## 1. Struktur deployment
 
-Gunakan custom domain dari registrable domain yang sama:
+```text
+/
+├── api/[...path].js       # adapter Express untuk Vercel Function
+├── client/                 # React + Vite
+├── server/                 # Express app, auth, repository
+├── vercel.json             # konfigurasi project Vercel
+└── package.json            # npm workspaces
+```
 
-- Frontend: `https://app.example.com`
-- Backend: `https://api.example.com`
+Vercel project menggunakan **root repository**, bukan `client/`.
 
-Konfigurasi:
+- Install Command: `npm ci`
+- Build Command: `npm run build -w client`
+- Output Directory: `client/dist`
+- Framework Preset: Vite
+- Function Region: pilih region terdekat dengan Neon production (Singapore jika tersedia)
 
-- Render `CORS_ORIGIN=https://app.example.com`
-- Vercel `VITE_API_URL=https://api.example.com`
-- Render `AUTH_COOKIE_SECURE=true`
-- Render `AUTH_COOKIE_SAME_SITE=Lax`
-
-Cookie sesi diset oleh `api.example.com` dan tetap first-party karena browser menganggap kedua host same-site.
-
-### Opsi B — proxy /api same-origin
-
-Frontend Vercel meneruskan `/api/*` ke Render sehingga browser hanya melihat origin Vercel.
-
-- Vercel `VITE_API_URL=` (kosong)
-- Tambahkan rewrite `/api/:path*` ke URL Render sebagai rewrite **pertama** di Vercel, sebelum SPA fallback.
-- Render `CORS_ORIGIN=https://app.example.com` tetap diisi.
-- Cookie tetap first-party pada domain Vercel.
-
-`client/vercel.json` sudah berisi SPA fallback. Jika memakai proxy, tambahkan rewrite API di depannya melalui dashboard Vercel atau edit `vercel.json`.
-
-### Opsi C — cross-site fallback
-
-Hanya bila Opsi A/B tidak memungkinkan:
-
-- `AUTH_COOKIE_SAME_SITE=None`
-- `AUTH_COOKIE_SECURE=true`
-- Frontend dan backend berada pada situs berbeda.
-
-Safari ITP, Firefox ETP, dan pembatasan cookie pihak ketiga Chromium dapat memblokir cookie ini. Konfigurasi ini tidak dianggap didukung penuh.
+`client/vercel.json` adalah konfigurasi frontend-only lama dan tidak dipakai pada project full-stack. File konfigurasi lama dipertahankan sampai konfigurasi root terbukti bekerja.
 
 ## 2. Neon PostgreSQL
 
-1. Buat project Neon production dan branch production terpisah dari branch test.
-2. Ambil dua connection string:
-   - **Pooled** (`-pooler`) untuk `DATABASE_URL` runtime.
-   - **Direct** (tanpa `-pooler`) untuk `DATABASE_URL_UNPOOLED` migration.
-3. Jangan menggunakan kredensial production di lokal atau test.
-4. Simpan snapshot/branch sebelum migration production.
-5. Jangan menjalankan reset, drop, truncate, importer, atau seed development pada production.
+Production database sudah dimigrasikan (4 applied, 0 pending). Jangan menjalankan migration dari Vercel Function.
 
-### Pemeriksaan migration (read-only)
+Gunakan dua connection string:
 
-```bash
-DATABASE_URL_UNPOOLED="<direct-production-url>" npm run db:migrate:status -w server
-```
+- `DATABASE_URL` — pooled, untuk runtime Function.
+- `DATABASE_URL_UNPOOLED` — direct, hanya untuk migration/status manual.
 
-Perintah ini hanya membaca `drizzle.schema_migrations` dan menampilkan migration pending. Tidak menulis data.
+Jangan menjalankan reset, drop, truncate, importer, seed, atau migration tanpa alasan. Snapshot/branch backup tetap disimpan sampai rollback window ditutup.
 
-### Menjalankan migration production
+Jika perlu memeriksa status migration secara read-only:
 
 ```bash
-DATABASE_URL_UNPOOLED="<direct-production-url>" npm run db:migrate -w server
+read -rsp 'Direct Neon production URL: ' DATABASE_URL_UNPOOLED; echo
+export DATABASE_URL_UNPOOLED
+npm run db:migrate:status -w server
+unset DATABASE_URL_UNPOOLED
 ```
 
-Migration yang ada bersifat additive:
+Jangan menjalankan `npm run db:migrate` kecuali ada migration baru yang sudah diaudit.
 
-- `0000` membuat tabel awal.
-- `0001` menambah unique index kategori.
-- `0002` menambahkan seed kategori bawaan historis (`user_id NULL`); seed ini tidak terlihat oleh pengguna dan tidak dipakai untuk registrasi baru.
-- `0003` menambahkan tabel `users`, `sessions`, foreign key, dan index autentikasi.
+## 3. Environment Variables Vercel
 
-Tidak ada migration yang melakukan drop/reset data.
+Tambahkan melalui Vercel Project Settings → Environment Variables. Jangan menaruh secret di repository.
 
-**Jangan** menjalankan:
-
-```bash
-npm run db:import
-```
-
-Importer SQLite hanya untuk development/cutover, bukan production baru.
-
-Setelah migration:
-
-```bash
-DATABASE_URL_UNPOOLED="<direct-production-url>" npm run db:migrate:status -w server
-```
-
-Pastikan tidak ada migration pending.
-
-## 3. Render — backend
-
-Blueprint tersedia di `render.yaml` dengan plan **Free**. Alternatif manual di dashboard:
-
-- Service type: **Web Service**
-- Runtime: **Node**
-- Root Directory: repository root
-- Build Command: `npm ci --omit=dev`
-- Start Command: `npm start`
-- Health Check Path: `/api/health`
-- Auto-Deploy: branch `main` dari GitHub
-- Plan: **Free**
-
-Initial migration production sudah diterapkan. **Jangan** menambahkan pre-deploy migration pada service ini. Jika perlu memeriksa status, jalankan `npm run db:migrate:status -w server` secara manual dengan koneksi direct.
-
-Environment backend:
+### Backend Function
 
 | Key | Nilai |
 |---|---|
 | `NODE_ENV` | `production` |
-| `NODE_VERSION` | `22` |
-| `DATABASE_URL` | connection string Neon **pooled** |
-| `DATABASE_URL_UNPOOLED` | connection string Neon **direct** |
-| `CORS_ORIGIN` | origin frontend production, mis. `https://app.example.com` |
+| `DATABASE_URL` | Neon pooled production |
+| `DATABASE_URL_UNPOOLED` | Neon direct production |
+| `CORS_ORIGIN` | `https://app-tugas.vercel.app` |
 | `SESSION_TTL_HOURS` | `168` |
 | `AUTH_COOKIE_SECURE` | `true` |
-| `AUTH_COOKIE_SAME_SITE` | `Lax` untuk same-site; `None` hanya fallback cross-site |
+| `AUTH_COOKIE_SAME_SITE` | `Lax` |
 | `AUTH_COOKIE_NAME` | `ptm_session` |
 
-Catatan:
+`DATABASE_URL_UNPOOLED` saat ini masih diperlukan karena `loadServerConfig` memvalidasinya. Variabel ini tidak dipakai oleh Function untuk koneksi runtime, tetapi harus tersedia agar konfigurasi valid.
 
-- Render menyediakan `PORT` otomatis.
-- Free web service dapat tidur saat tidak ada traffic; cold start pertama bisa lebih lambat.
-- Migration production sudah selesai; jalankan hanya status read-only bila diperlukan.
-- Jangan mengisi `CORS_ORIGIN` dengan `*`.
-- Tambahkan custom domain `api.example.com` jika memakai Opsi A.
-- `AUTH_COOKIE_SECURE=true` wajib untuk production (HTTPS).
-
-## 4. Vercel — frontend
-
-Konfigurasi project:
-
-- Root Directory: `client`
-- Install Command: `cd .. && npm ci`
-- Build Command: `npm run build`
-- Output Directory: `dist`
-- Framework: Vite
-
-Environment frontend:
+### Frontend build
 
 | Key | Nilai |
 |---|---|
-| `VITE_API_URL` | `https://api.example.com` untuk Opsi A; kosong untuk proxy Opsi B |
 | `VITE_PUBLIC_DEPLOYMENT` | `true` |
+| `VITE_API_URL` | kosong |
 
-`client/vercel.json` sudah menambahkan:
+`VITE_API_URL` harus kosong agar frontend memakai same-origin `/api`.
 
-- SPA fallback ke `index.html`
-- Header keamanan dasar (`nosniff`, `Referrer-Policy`, `X-Frame-Options`, `Permissions-Policy`)
+## 4. Routing Vercel
 
-Jika memakai proxy Opsi B, tambahkan rewrite API sebelum catch-all SPA. Contoh urutan rewrite:
+- `api/[...path].js` menangani seluruh `/api/*`.
+- `vercel.json` mengarahkan SPA fallback ke `index.html`, tetapi tidak menangkap `/api`.
+- Frontend memakai route client-side `/`, `/login`, `/register`, dan `/app`.
+- Function memakai Express app yang sudah ada; tidak ada perubahan kontrak endpoint.
 
-```json
-[
-  { "source": "/api/:path*", "destination": "https://NAMA-SERVICE.onrender.com/api/:path*" },
-  { "source": "/(.*)", "destination": "/index.html" }
-]
-```
+Setelah deploy, verifikasi di Vercel Preview bahwa:
 
-Jangan menaruh URL backend nyata di source jika tidak diperlukan; gunakan dashboard Vercel bila memungkinkan.
+1. `GET /api/health` masuk ke Function dan mengembalikan `200`.
+2. `GET /api/tasks` tanpa sesi mengembalikan `401`, bukan HTML `index.html`.
+3. `/login`, `/register`, dan `/app` dimuat sebagai SPA.
+4. `/api/*` tidak pernah diarahkan ke `index.html`.
 
-Tambahkan custom domain `app.example.com` agar same-site dengan `api.example.com`.
+## 5. Session, CORS, dan CSRF
 
-## 5. GitHub
+Karena frontend dan backend satu origin:
 
-- Hubungkan repository ke Render dan Vercel.
-- Gunakan branch production yang sama.
-- Jangan commit `.env`, `.env.test`, `.env.production`, atau kredensial Neon.
-- Contoh environment production hanya tersedia sebagai:
-  - `server/.env.production.example`
-  - `client/.env.production.example`
-- Pastikan secret hanya berada di dashboard Render/Vercel.
+- Cookie sesi memakai `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`.
+- Tidak memakai `SameSite=None` dan tidak memakai localStorage.
+- CORS credentials diaktifkan oleh backend.
+- `CORS_ORIGIN` harus persis `https://app-tugas.vercel.app` tanpa trailing slash.
+- Request mutasi tetap memerlukan `Origin` yang sesuai dan token CSRF.
+- Preview deployment Vercel memiliki origin berbeda. Jika menguji auth di Preview, tambahkan origin preview tersebut secara eksplisit ke `CORS_ORIGIN`; wildcard tidak didukung.
 
-## 6. Build dan start lokal production-like
+## 6. Database pool di runtime
+
+`api/[...path].js` membuat `pg.Pool` pada module scope dengan `max: 1`, sehingga koneksi tidak dibuka ulang pada setiap request dan tetap dapat dipakai ulang selama Function instance hangat.
+
+Migration tidak dijalankan oleh Function.
+
+## 7. Build dan verifikasi lokal
 
 ```bash
 npm ci
+npm test
 npm run build
-npm run db:migrate:status -w server
-npm start
+openspec validate --all --strict
 ```
 
-Untuk build frontend dengan konfigurasi deployment:
+Build frontend production dengan konfigurasi Vercel:
 
 ```bash
-VITE_API_URL="https://api.example.com" VITE_PUBLIC_DEPLOYMENT=true npm run build -w client
+VITE_PUBLIC_DEPLOYMENT=true npm run build -w client
 ```
 
-Untuk backend production-like, isi environment production dengan database test/development terlebih dahulu:
+## 8. Checklist deployment Vercel
 
-```bash
-NODE_ENV=production \
-AUTH_COOKIE_SECURE=true \
-AUTH_COOKIE_SAME_SITE=Lax \
-CORS_ORIGIN="https://app.example.com" \
-DATABASE_URL="<test-pooled>" \
-DATABASE_URL_UNPOOLED="<test-direct>" \
-npm start
-```
+1. Import repository `novaldev-code/app-tugas` ke Vercel.
+2. Pilih branch `main`.
+3. Set Root Directory ke root repository (bukan `client`).
+4. Framework Preset: Vite.
+5. Install Command: `npm ci`.
+6. Build Command: `npm run build -w client`.
+7. Output Directory: `client/dist`.
+8. Tambahkan environment variables di atas.
+9. Deploy dan tunggu status **Ready**.
+10. Buka `https://app-tugas.vercel.app`.
+11. Uji health, register, login, logout, `/app`, CRUD, dan isolasi dua akun.
 
-Jangan arahkan command ini ke production sebelum migration dan backup diverifikasi.
+## 9. Rollback
 
-## 7. Checklist verifikasi setelah deploy
-
-1. `GET https://api.example.com/api/health` → `200 {"status":"ok"}`.
-2. CORS preflight dari `https://app.example.com` mengembalikan origin tersebut dan `Access-Control-Allow-Credentials: true`.
-3. Register dari frontend berhasil dan `Set-Cookie` berisi `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`.
-4. Login berhasil dan diarahkan ke `/app`.
-5. Login gagal tetap di `/login`.
-6. `/app` tanpa sesi diarahkan ke `/login`.
-7. Logout menghapus sesi dan `/app` kembali meminta login.
-8. CRUD tugas dan kategori berfungsi.
-9. Dua akun tidak dapat melihat data satu sama lain.
-10. `npm run db:migrate:status -w server` tidak menampilkan migration pending.
-
-## 8. Rollback
-
-- Jangan drop database production.
-- Simpan snapshot/branch Neon sebelum migration.
-- Migration bersifat additive; rollback aplikasi dapat dilakukan dengan mengembalikan deployment ke revisi sebelumnya.
-- Jika rollback database diperlukan, pulihkan snapshot/branch Neon, bukan menjalankan reset manual.
+- Jangan drop/reset database production.
+- Simpan snapshot/branch Neon sebelum perubahan berisiko.
+- Rollback aplikasi dengan mengembalikan deployment Vercel ke revisi sebelumnya.
+- Jika rollback database diperlukan, pulihkan snapshot/branch Neon.

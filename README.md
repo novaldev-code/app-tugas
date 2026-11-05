@@ -121,7 +121,7 @@ Cookie sesi wajib bersifat **first-party** pada deployment yang didukung:
 - frontend dan backend memakai subdomain dari registrable domain yang sama (misalnya `app.example.com` dan `api.example.com`), atau
 - frontend meneruskan `/api` ke backend melalui rewrite/proxy same-origin.
 
-`SameSite=None; Secure` hanya dipakai sebagai fallback bila cross-site tidak dapat dihindari. Safari ITP, Firefox ETP, dan pembatasan cookie pihak ketiga di Chromium dapat memblokir cookie tersebut ketika Vercel dan Render berada pada situs berbeda. Konfigurasi cross-site tanpa domain same-site atau proxy same-origin dianggap tidak didukung.
+`SameSite=None; Secure` hanya dipakai sebagai fallback bila cross-site tidak dapat dihindari. Safari ITP, Firefox ETP, dan pembatasan cookie pihak ketiga di Chromium dapat memblokir cookie tersebut ketika frontend dan backend berada pada situs berbeda. Konfigurasi cross-site tanpa domain same-site atau proxy same-origin dianggap tidak didukung.
 
 ## Migrasi Database
 
@@ -230,94 +230,53 @@ npm run db:studio     # buka Drizzle Studio
 npm run migrate       # alias db:migrate
 ```
 
-## Deployment Neon, Render, dan Vercel
+## Deployment Vercel Full-Stack
 
-Panduan langkah demi langkah, konfigurasi cookie production, dan checklist manual tersedia di [`DEPLOYMENT.md`](DEPLOYMENT.md).
+Panduan lengkap tersedia di [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
-Deployment ini menjalankan aplikasi multi-user dengan autentikasi. Backend boleh diakses publik hanya melalui HTTPS dan seluruh endpoint data mewajibkan sesi valid; gunakan topologi cookie first-party. Vercel menyajikan landing dan workspace; `/app` diarahkan ke `/login` bila belum ada sesi.
+Production menggunakan satu project Vercel untuk frontend dan backend:
 
-### Neon
+- Frontend: Vercel, root repository, build `npm run build -w client`, output `client/dist`
+- Backend: Vercel Function `api/[...path].js` yang mengekspor Express app tanpa `app.listen()`
+- API: same-origin `/api/*` pada domain Vercel
+- Database: Neon PostgreSQL production
 
-- Gunakan project/branch Neon production khusus untuk deployment dan branch terpisah untuk test.
-- `DATABASE_URL` adalah koneksi pooled untuk runtime backend.
-- `DATABASE_URL_UNPOOLED` adalah koneksi langsung untuk migration dan importer. Jangan memakai koneksi pooled untuk DDL atau importer.
-- Buat snapshot/branch sebelum cutover data dan simpan sampai rollback window ditutup.
-- Jangan menaruh kredensial, connection string production, atau isi `.env` di repository.
-- Test dan development tidak boleh memakai database production; integration test memakai `server/.env.test` dan guard test akan menolak URL production.
+Konfigurasi Vercel:
 
-### Backend Render
+- Root Directory: root repository (bukan `client`)
+- Install Command: `npm ci`
+- Build Command: `npm run build -w client`
+- Output Directory: `client/dist`
+- Framework: Vite
 
-Konfigurasi Web Service di dashboard Render:
-
-- Build Command: `npm ci --omit=dev`
-- Start Command: `npm start`
-- Health Check Path: `/api/health`
-- Root Directory: root repository monorepo
-- Plan: Free (dapat tidur saat tidak ada traffic)
-- Pre-Deploy Command: kosong; initial migration production sudah diterapkan
-- Akses jaringan: HTTPS publik diperbolehkan karena seluruh endpoint data mewajibkan sesi valid; pastikan CORS dan topologi cookie first-party benar.
-
-Environment backend yang wajib diisi:
+Environment Vercel:
 
 - `NODE_ENV=production`
-- `DATABASE_URL` dari koneksi Neon pooled
-- `DATABASE_URL_UNPOOLED` dari koneksi Neon langsung
-- `CORS_ORIGIN` berisi origin frontend yang diizinkan, dipisahkan koma, tanpa wildcard
-- `SESSION_TTL_HOURS`, `AUTH_COOKIE_SECURE`, `AUTH_COOKIE_SAME_SITE`, dan `AUTH_COOKIE_NAME` sesuai topologi cookie
-- `PORT` hanya jika platform tidak menyediakan port otomatis
+- `DATABASE_URL` — Neon pooled
+- `DATABASE_URL_UNPOOLED` — Neon direct (diperlukan validasi konfigurasi runtime)
+- `CORS_ORIGIN=https://app-tugas.vercel.app`
+- `SESSION_TTL_HOURS=168`
+- `AUTH_COOKIE_SECURE=true`
+- `AUTH_COOKIE_SAME_SITE=Lax`
+- `AUTH_COOKIE_NAME=ptm_session`
+- `VITE_PUBLIC_DEPLOYMENT=true`
+- `VITE_API_URL` kosong (same-origin `/api`)
 
-Migration production sudah diterapkan. Service tidak menjalankan migration otomatis; gunakan `npm run db:migrate:status -w server` secara manual dengan koneksi direct hanya untuk pemeriksaan read-only. Runtime menggunakan koneksi pooled dan tidak menjalankan migration.
+`api/[...path].js` memakai pool PostgreSQL pada module scope dengan `max: 1`. Migration production sudah diterapkan; Function tidak menjalankan migration. Jangan menjalankan reset, drop, importer, seed, atau migration tanpa alasan.
 
-### Frontend Vercel
+Keamanan:
 
-Konfigurasi project Vercel:
+- Cookie sesi `HttpOnly`, `Secure`, `SameSite=Lax`, first-party pada domain Vercel.
+- Tidak memakai localStorage untuk session.
+- CORS credentials aktif dan `CORS_ORIGIN` harus origin Vercel yang sebenarnya tanpa trailing slash.
+- CSRF dan ownership filtering tetap berlaku.
 
-- Root Directory: `client`
-- Install Command: `cd .. && npm ci`
-- Build Command: `npm run build`
-- Output Directory: `dist`
-- Environment `VITE_API_URL`: isi hanya jika frontend memanggil backend pada origin lain. Untuk cookie first-party, gunakan rewrite/proxy `/api` same-origin atau domain same-site.
-- Environment `VITE_PUBLIC_DEPLOYMENT=true` untuk build landing publik; `/app` tetap memerlukan sesi valid.
+Verifikasi setelah deploy:
 
-SPA fallback: gunakan preset Vite/SPA pada Vercel atau atur rewrite semua path non-aset ke `/index.html` melalui pengaturan hosting. Untuk autentikasi cookie, disarankan rewrite `/api/*` ke backend sehingga browser melihat origin yang sama dan cookie sesi bersifat first-party. Jangan menaruh credential di repository.
-
-Build landing publik:
-
-```bash
-VITE_PUBLIC_DEPLOYMENT=true npm run build -w client
-```
-
-Build publik tetap menampilkan landing. `/app` hanya menampilkan workspace jika sesi valid; pengguna tanpa sesi diarahkan ke `/login`.
-
-### CORS dan Base URL
-
-- Set `CORS_ORIGIN` ke origin frontend deployment yang benar-benar diizinkan. Jangan gunakan wildcard `*`; credentials/cookie hanya dikirim ke origin tersebut.
-- Request mutasi tanpa `Origin` yang diizinkan ditolak `403`.
-- `VITE_API_URL` dibaca saat build frontend. Kosongkan untuk path relatif/proxy; isi dengan URL backend hanya bila memakai origin terpisah.
-- Gunakan domain same-site atau rewrite/proxy `/api` same-origin agar cookie sesi first-party.
-- Jangan hardcode URL Render/Vercel di source atau dokumentasi; gunakan environment platform.
-
-### Health Check
-
-`GET /api/health` memakai koneksi database runtime dan menjalankan query read-only ringan `SELECT 1` dengan batas waktu singkat.
-
-- `200` + `{ "status": "ok" }`: backend dan database dapat berkomunikasi.
-- `503` + `{ "status": "unhealthy" }`: koneksi, query, atau timeout gagal.
-- Respons memakai `Cache-Control: no-store` dan hanya memuat status. Respons maupun log tidak boleh memuat URL, credential, host, nama database, pesan error, atau stack trace.
-- Endpoint tidak menulis data, tidak menjalankan migration, dan tidak memakai `DATABASE_URL_UNPOOLED`.
-- Pastikan migration dan cutover data selesai sebelum health check dijadikan syarat traffic Render.
-
-### Checklist Deployment
-
-1. Buat snapshot/branch Neon dan siapkan `DATABASE_URL` pooled serta `DATABASE_URL_UNPOOLED` langsung.
-2. Set environment backend di Render, termasuk `CORS_ORIGIN` eksplisit, `NODE_ENV=production`, dan variabel sesi/cookie.
-3. Pastikan initial migration production sudah selesai; jangan mengaktifkan pre-deploy migration otomatis.
-4. Jangan menjalankan importer SQLite pada production.
-5. Deploy backend dengan HTTPS dan health check `/api/health`.
-6. Build frontend Vercel dengan output `dist`, SPA fallback, dan rewrite/proxy `/api` same-origin atau domain same-site untuk cookie first-party.
-7. Verifikasi CORS dari origin yang diizinkan, credentials aktif, dan origin lain tidak mendapat header CORS.
-8. Verifikasi `/api/health` mengembalikan `200` tanpa detail koneksi.
-9. Verifikasi `/app` memerlukan sesi valid, login gagal tetap di `/login`, dan dua akun tidak saling melihat data.
+1. `GET /api/health` → `200 {"status":"ok"}`.
+2. `/api/tasks` tanpa sesi → `401`, bukan HTML SPA.
+3. `/login`, `/register`, `/app` dimuat sebagai SPA.
+4. Register, login, logout, CRUD, dan isolasi dua akun berfungsi.
 
 ## Ringkasan API
 

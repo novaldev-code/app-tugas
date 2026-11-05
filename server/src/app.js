@@ -140,6 +140,7 @@ export function createApp(
     corsOrigins = [],
     healthCheckTimeoutMs = 2000,
     auth = {},
+    serveClient = true,
   } = {},
 ) {
   const app = express();
@@ -521,7 +522,7 @@ export function createApp(
 
   const clientDist = path.resolve(__dirname, '../../client/dist');
 
-  if (fs.existsSync(clientDist)) {
+  if (serveClient && fs.existsSync(clientDist)) {
     app.use(express.static(clientDist));
 
     app.use((req, res, next) => {
