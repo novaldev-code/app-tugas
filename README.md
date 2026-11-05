@@ -244,7 +244,7 @@ Production menggunakan satu project Vercel untuk frontend dan backend:
 Konfigurasi Vercel:
 
 - Root Directory: root repository (bukan `client`)
-- Install Command: `npm ci`
+- Install Command: `npm ci --include=dev`
 - Build Command: `npm run build -w client`
 - Output Directory: `client/dist`
 - Framework: Vite
@@ -262,7 +262,7 @@ Environment Vercel:
 - `VITE_PUBLIC_DEPLOYMENT=true`
 - `VITE_API_URL` kosong (same-origin `/api`)
 
-`api/[...path].js` memakai pool PostgreSQL pada module scope dengan `max: 1`. Migration production sudah diterapkan; Function tidak menjalankan migration. Jangan menjalankan reset, drop, importer, seed, atau migration tanpa alasan.
+Install Command memakai `npm ci --include=dev` karena Vite berada di `devDependencies` dan build production dapat menghilangkan devDependencies. `api/[...path].js` memakai pool PostgreSQL pada module scope dengan `max: 1`. Migration production sudah diterapkan; Function tidak menjalankan migration. Jangan menjalankan reset, drop, importer, seed, atau migration tanpa alasan.
 
 Keamanan:
 

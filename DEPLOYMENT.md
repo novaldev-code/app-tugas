@@ -29,7 +29,7 @@ Semua request frontend ke `/api/*` ditangani Vercel Function pada origin yang sa
 
 Vercel project menggunakan **root repository**, bukan `client/`.
 
-- Install Command: `npm ci`
+- Install Command: `npm ci --include=dev`
 - Build Command: `npm run build -w client`
 - Output Directory: `client/dist`
 - Framework Preset: Vite
@@ -87,6 +87,8 @@ Tambahkan melalui Vercel Project Settings → Environment Variables. Jangan mena
 
 `VITE_API_URL` harus kosong agar frontend memakai same-origin `/api`.
 
+`VITE_API_URL` dan dependency build: Vite berada di `devDependencies` client. Jika environment build memiliki `NODE_ENV=production`, npm dapat menghilangkan devDependencies. Karena itu Install Command Vercel harus memakai `npm ci --include=dev`.
+
 ## 4. Routing Vercel
 
 - `api/[...path].js` menangani seluruh `/api/*`.
@@ -139,7 +141,7 @@ VITE_PUBLIC_DEPLOYMENT=true npm run build -w client
 2. Pilih branch `main`.
 3. Set Root Directory ke root repository (bukan `client`).
 4. Framework Preset: Vite.
-5. Install Command: `npm ci`.
+5. Install Command: `npm ci --include=dev`.
 6. Build Command: `npm run build -w client`.
 7. Output Directory: `client/dist`.
 8. Tambahkan environment variables di atas.
